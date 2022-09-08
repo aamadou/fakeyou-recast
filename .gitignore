@@ -1,3 +1,4 @@
+target/
 *.wav
 *.recast
 *.recast_base
