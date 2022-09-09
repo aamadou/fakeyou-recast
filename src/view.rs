@@ -106,7 +106,7 @@ pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a V
         model_selection_row_elems
         .push(Text::new(selected_hubert_str).into());
     }
-    let model_selection_row = Row::with_children(model_selection_row_elems);
+    let model_selection_row = Row::with_children(model_selection_row_elems).spacing(10);
 
     let mut file_selection_row_elems: Vec<Element<Message>> = vec![];
     if view_state.input_device_list_selected == Some(String::from("From file"))
@@ -127,12 +127,12 @@ pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a V
             Button::new(&mut view_state.output_browse_state, Text::new("Browse")).on_press(Message::OutputBrowsePressed).into()
         );
     }
-    let file_selection_row = Row::with_children(file_selection_row_elems);
+    let file_selection_row = Row::with_children(file_selection_row_elems).spacing(10);
 
-    let elements = Column::new()
+    let elements = Column::new().spacing(5)
         .push(model_selection_row)
         .push(
-            Row::new()
+            Row::new().spacing(10)
             .push(Text::new("Input Device: "))
             .push(
                 PickList::new(
@@ -156,7 +156,7 @@ pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a V
             file_selection_row
         )
         .push(
-            Row::new()
+            Row::new().spacing(10)
             .push(Text::new("Input Volume: "))
             .push(
                 Slider::new(&mut view_state.slider_1_state, 0.0..=100.0, view_state.slider_1_value, Message::Slider1Changed)
@@ -167,7 +167,7 @@ pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a V
             )
         )
         .push(
-            Row::new()
+            Row::new().spacing(10)
             .push(
                 Button::new(&mut view_state.record_state, if recording { Text::new("Stop")} else {Text::new("Record")}).on_press(Message::RecordPressed)
             )

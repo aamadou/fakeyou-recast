@@ -1,15 +1,18 @@
+#![feature(associated_type_defaults)]
+
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 use iced::{executor, Application, Element, Command, Settings, window, Subscription, keyboard::{self, KeyCode}};
 use iced_native::{event, subscription, Event};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleRate, BufferSize};
 use ringbuf::RingBuffer;
 use native_dialog::FileDialog;
-use tch::{CModule, Tensor};
 
 mod view;
 mod audio;
+mod softvc;
+
+use softvc::Model;
 
 pub fn main() -> iced::Result {
     let settings = Settings {
@@ -24,15 +27,18 @@ pub fn main() -> iced::Result {
     App::run(settings)
 }
 
+const WAV_TENSOR_SIZE: usize = 319507;
 
 //FIXME unsafe
-static mut RECORD_BUF: [f32; 319507] = [0.0; 319507];
+static mut RECORD_BUF: [f32; WAV_TENSOR_SIZE] = [0.0; WAV_TENSOR_SIZE];
 static mut RECORD_SAMPLE_COUNT: usize = 0;
 static mut INPUT_VOLUME: f32 = 80.0;
 static mut OUTPUT_VOLUME: f32 = 80.0;
 
 struct App {
-    models: Models,
+    hubert: softvc::Hubert,
+    acoustic: softvc::Acoustic,
+    hifigan: softvc::Hifigan,
     view_state: view::ViewState,
     input_device_list_options: Vec<String>,
     output_device_list_options: Vec<String>,
@@ -40,46 +46,6 @@ struct App {
     realtime_record_sender: Option<std::sync::mpsc::Sender<(bool, f32, f32)>>,
     recording: bool,
     realtime_recording: bool,
-}
-
-#[derive(Clone)]
-struct Models {
-    // FIXME provide getter functions and unpub these
-    pub hubert_model: Arc<Mutex<Option<CModule>>>,
-    pub acoustic_model: Arc<Mutex<Option<CModule>>>,
-    pub hifigan_model: Arc<Mutex<Option<CModule>>>,
-}
-
-impl Models {
-    fn new() -> Models {
-        Models {
-            hubert_model: Arc::new(Mutex::new(None)),
-            acoustic_model: Arc::new(Mutex::new(None)),
-            hifigan_model: Arc::new(Mutex::new(None)),
-        }
-    }
-    fn load_hubert(&self, path: PathBuf) 
-    {
-        let mut lock = (*self.hubert_model).lock().unwrap();
-        let mut hubert = CModule::load(path).unwrap();
-        hubert.set_eval();
-        *lock = Some(hubert);
-    }
-    fn load_hifigan(&self, path: PathBuf) 
-    {
-        let mut lock = (*self.hifigan_model).lock().unwrap();
-        let mut hifigan = CModule::load(path).unwrap();
-        hifigan.set_eval();
-        *lock = Some(hifigan);
-
-    }
-    fn load_acoustic(&self, path: PathBuf) 
-    {
-        let mut lock = (*self.acoustic_model).lock().unwrap();
-        let mut acoustic = CModule::load(path).unwrap();
-        acoustic.set_eval();
-        *lock = Some(acoustic);
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -106,7 +72,9 @@ impl Application for App {
     type Flags = ();
 
     fn new(_flags: ()) -> (App, Command<Self::Message>) {
-        let models = Models::new();
+        let hubert = softvc::Hubert::new();
+        let acoustic = softvc::Acoustic::new();
+        let hifigan = softvc::Hifigan::new();
         let view_state = view::ViewState::new();
         let recording = false;
         let record_sender = None;
@@ -121,7 +89,9 @@ impl Application for App {
 
         (
             App {
-                models,
+                hubert,
+                acoustic,
+                hifigan,
                 view_state,
                 input_device_list_options,
                 output_device_list_options,
@@ -134,12 +104,15 @@ impl Application for App {
         )
     }
 
+    /// Controls the title bar of the application window
     fn title(&self) -> String {
         String::from("FakeYou Recast")
     }
 
+    /// UI setup and state changes
     fn view(&mut self) -> Element<Message> { view::view(&mut self.view_state, &self.input_device_list_options, &self.output_device_list_options, self.recording, self.realtime_recording) }
 
+    /// Respond to messages from the UI with appropriate actions
     fn update(&mut self, msg: Self::Message) -> Command<Self::Message> {
         match msg {
             Message::ShowDebugPressed => {
@@ -183,22 +156,22 @@ impl Application for App {
                 match path {
                     Some(p) => {
                         //TODO some kind of loading spinner or something while this is happening
-                        let models = self.models.clone();
+                        let acoustic = self.acoustic.clone();
                         let path = p.clone();
                         std::thread::spawn(move ||{
-                            models.load_acoustic(path)}
+                            acoustic.load(path)}
                         );
                         self.view_state.model_browse_selected = Some(p.clone());
 
-                        let models = self.models.clone();
+                        let hifigan = self.hifigan.clone();
                         std::thread::spawn(move || {
-                            models.load_hifigan(PathBuf::from("./models/model1.recast_base"))
+                            hifigan.load(PathBuf::from("./models/model1.recast_base"))
                         });
                         self.view_state.hifigan_browse_selected = Some(PathBuf::from("./models/model1.recast_base"));
 
-                        let models = self.models.clone();
+                        let hubert = self.hubert.clone();
                         std::thread::spawn(move ||{
-                            models.load_hubert(PathBuf::from("./models/model2.recast_base"))}
+                            hubert.load(PathBuf::from("./models/model2.recast_base"))}
                         );
                         self.view_state.hubert_browse_selected = Some(PathBuf::from("./models/model2.recast_base"));
                     },
@@ -215,10 +188,10 @@ impl Application for App {
                     .unwrap();
                 match path {
                     Some(p) => {
-                        let models = self.models.clone();
+                        let hifigan = self.hifigan.clone();
                         let path = p.clone();
                         std::thread::spawn(move ||{
-                            models.load_hifigan(path)}
+                            hifigan.load(path)}
                         );
                         self.view_state.hifigan_browse_selected = Some(p.clone());
                     },
@@ -234,10 +207,10 @@ impl Application for App {
                     .unwrap();
                 match path {
                     Some(p) => {
-                        let models = self.models.clone();
+                        let hubert = self.hubert.clone();
                         let path = p.clone();
                         std::thread::spawn(move ||{
-                            models.load_hubert(path)}
+                            hubert.load(path)}
                         );
                         self.view_state.hubert_browse_selected = Some(p.clone());
                     },
@@ -277,9 +250,11 @@ impl Application for App {
             }
             Message::PlayTargetPressed => {
                 let output_device_name = self.view_state.output_device_list_selected.clone();
-                let models = self.models.clone();
+                let hubert = self.hubert.clone();
+                let acoustic = self.acoustic.clone();
+                let hifigan = self.hifigan.clone();
                 std::thread::spawn(move || {
-                    play_target(models, output_device_name)
+                    play_target(hubert, acoustic, hifigan, output_device_name)
                 });
             }
             Message::PlaySourcePressed => { 
@@ -398,7 +373,7 @@ fn start_realtime_recording(realtime_record_receiver: std::sync::mpsc::Receiver<
 fn start_recording(record_receiver: std::sync::mpsc::Receiver<(bool, f32)>, input_device_name: Option<String>)  {
     let input_device = audio::get_input_device(input_device_name).0.unwrap();
     let input_config = cpal::StreamConfig { channels: 1, sample_rate: SampleRate(48000), buffer_size: BufferSize::Default };
-    unsafe { RECORD_BUF = [0f32; 319507] };
+    unsafe { RECORD_BUF = [0.0; WAV_TENSOR_SIZE] };
     unsafe { RECORD_SAMPLE_COUNT = 0 };
     let mut i = 0;
     let input_data_fn = move |data: &[f32], _: &cpal::InputCallbackInfo| {
@@ -440,7 +415,7 @@ fn play_source(output_device_name: Option<String>) {
             let s = unsafe { RECORD_BUF[i] };
             *sample = audio::apply_volume(s, unsafe { OUTPUT_VOLUME});
             // Expand one sample to 6 to convert 16khz mono to 48khz stereo
-            if j%6 == 5 && i < 319507
+            if j%6 == 5 && i < WAV_TENSOR_SIZE
             {
                 i += 1;
             }
@@ -460,64 +435,11 @@ fn play_source(output_device_name: Option<String>) {
 /// If the conversion is fast enough, we don't need to worry too much about
 /// redoing it when the user wants to hear the same input twice.
 /// If we are too slow, it could be a nice time saver for that case though.
-fn play_target(models: Models, output_device_name: Option<String>) {
+fn play_target(hubert: softvc::Hubert, acoustic: softvc::Acoustic, hifigan: softvc::Hifigan, output_device_name: Option<String>) {
     //TODO some kind of loading spinner or something while this is happening
-    let mut wav_data = unsafe { RECORD_BUF.to_vec() };
-    wav_data.resize(319507, 0.0);
-    let tensor = Tensor::of_slice(wav_data.as_slice());
-    tch::maybe_init_cuda();
-    let wav_tensor = tensor.unsqueeze(0).unsqueeze(0).to(tch::Device::Cuda(0));
-    if cfg!(debug_assertions) {
-        println!("wav: {:?}", wav_tensor.size());
-    }
-    tch::jit::set_graph_executor_optimize(false);
-    let hubert_start_time = std::time::Instant::now();
-    let hubert_output = {
-        let hubert_model = models.hubert_model.lock().unwrap();
-        hubert_model.as_ref().unwrap().method_ts("units", &[wav_tensor]).unwrap()
-    };
-    let hubert_end_time = std::time::Instant::now();
-    if cfg!(debug_assertions) {
-        println!("hubert: {:?}", hubert_output.size());
-    }
-    let generate_start_time = std::time::Instant::now();
-    let generate_output = {
-        let acoustic_model = models.acoustic_model.lock().unwrap();
-        acoustic_model.as_ref().unwrap().method_ts("generate", &[hubert_output]).unwrap()
-    };
-    let generate_end_time = std::time::Instant::now();
-    if cfg!(debug_assertions) {
-        println!("generate: {:?}", generate_output.size());
-    }
-    let transpose_output = generate_output.transpose(1, 2);
-    if cfg!(debug_assertions) {
-        println!("transpose: {:?}", transpose_output.size());
-    }
-
-    let hifigan_start_time = std::time::Instant::now();
-    let hifigan_output = tch::no_grad(move|| {
-        let hifigan_model = models.hifigan_model.lock().unwrap();
-        hifigan_model.as_ref().unwrap().forward_ts(&[transpose_output]).unwrap()
-    });
-    let hifigan_end_time = std::time::Instant::now();
-
-    if cfg!(debug_assertions) {
-        println!("hifigan: {:?}", hifigan_output.size());
-    }
-
-    //if cfg!(debug_assertions) {
-        println!("hubert: {:?}", hubert_end_time - hubert_start_time);
-        println!("generator: {:?}", generate_end_time - generate_start_time);
-        println!("hifigan: {:?}", hifigan_end_time - hifigan_start_time);
-    //}
-
-    let sample_count = hifigan_output.size()[2];
-    let samples = hifigan_output.reshape(&[sample_count]).to(tch::Device::Cpu);
-    // RECORD_SAMPLE_COUNT is used instead of sample_count because the input
-    // tensor is padded to 20 seconds and the model has a stroke if the user
-    // stops recording before then and sample_count is used.
-    let mut sample_buf = vec![0.0; unsafe { RECORD_SAMPLE_COUNT }];
-    samples.copy_data(&mut sample_buf, unsafe { RECORD_SAMPLE_COUNT });
+    let mut wav_data = unsafe {RECORD_BUF}.to_vec();
+    wav_data.resize(WAV_TENSOR_SIZE, 0.0);
+    let out_samples = softvc::inference(wav_data.into_boxed_slice(), hubert, acoustic, hifigan);
 
     let spec = hound::WavSpec {
         channels: 1,
@@ -526,14 +448,14 @@ fn play_target(models: Models, output_device_name: Option<String>) {
         sample_format: hound::SampleFormat::Float,
     };
     let mut writer = hound::WavWriter::create("test.wav", spec).unwrap();
-    for sample in sample_buf.iter() {
+    for sample in out_samples.iter() {
         writer.write_sample(*sample).unwrap();
     }
 
     let mut i = 0;
     let output_data_fn = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
         for (j, sample) in data.iter_mut().enumerate() {
-            let s = sample_buf[i];
+            let s = out_samples[i];
             *sample = audio::apply_volume(s, unsafe { OUTPUT_VOLUME});
             // expand one sample to 6 to convert 16khz mono to 48khz stereo
             if j%6 == 5 && i < unsafe { RECORD_SAMPLE_COUNT } as usize
