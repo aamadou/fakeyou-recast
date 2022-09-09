@@ -1,14 +1,15 @@
-use std::fs::File;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use iced::{executor, Application, Command, Element, Settings, Column, Row, window, Subscription, keyboard::{self, KeyCode}};
-use iced::widget::{Slider, slider, Button, button, Text, pick_list, PickList};
+use iced::{executor, Application, Element, Command, Settings, window, Subscription, keyboard::{self, KeyCode}};
 use iced_native::{event, subscription, Event};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleRate, BufferSize};
 use ringbuf::RingBuffer;
 use native_dialog::FileDialog;
 use tch::{CModule, Tensor};
+
+mod view;
+mod audio;
 
 pub fn main() -> iced::Result {
     let settings = Settings {
@@ -32,35 +33,13 @@ static mut OUTPUT_VOLUME: f32 = 80.0;
 
 struct App {
     models: Models,
-    model_browse_state: button::State,
-    model_browse_selected: Option<PathBuf>,
-    hifigan_browse_state: button::State,
-    hifigan_browse_selected: Option<PathBuf>,
-    hubert_browse_state: button::State,
-    hubert_browse_selected: Option<PathBuf>,
-    show_debug: bool,
-    slider_1_state: slider::State,
-    slider_1_value: f32,
-    slider_2_state: slider::State,
-    slider_2_value: f32,
-    record_state: button::State,
-    recording: bool,
-    record_sender: Option<std::sync::mpsc::Sender<(bool, f32)>>,
-    play_target_state: button::State,
-    play_source_state: button::State,
-    realtime_record_state: button::State,
-    realtime_recording: bool,
-    realtime_record_sender: Option<std::sync::mpsc::Sender<(bool, f32, f32)>>,
-    input_device_list_state: pick_list::State<String>,
+    view_state: view::ViewState,
     input_device_list_options: Vec<String>,
-    input_device_list_selected: Option<String>,
-    input_browse_state: button::State,
-    input_browse_selected: Option<PathBuf>,
-    output_device_list_state: pick_list::State<String>,
     output_device_list_options: Vec<String>,
-    output_device_list_selected: Option<String>,
-    output_browse_state: button::State,
-    output_browse_selected: Option<PathBuf>
+    record_sender: Option<std::sync::mpsc::Sender<(bool, f32)>>,
+    realtime_record_sender: Option<std::sync::mpsc::Sender<(bool, f32, f32)>>,
+    recording: bool,
+    realtime_recording: bool,
 }
 
 #[derive(Clone)]
@@ -104,7 +83,7 @@ impl Models {
 }
 
 #[derive(Clone, Debug)]
-enum Message {
+pub enum Message {
     ModelBrowsePressed,
     HifiganBrowsePressed,
     HubertBrowsePressed,
@@ -128,70 +107,28 @@ impl Application for App {
 
     fn new(_flags: ()) -> (App, Command<Self::Message>) {
         let models = Models::new();
-        let model_browse_state = button::State::new();
-        let model_browse_selected = None;
-        let hifigan_browse_state = button::State::new();
-        let hifigan_browse_selected = None;
-        let hubert_browse_state = button::State::new();
-        let hubert_browse_selected = None;
-        let show_debug = false;
-        let slider_1_state = slider::State::new();
-        let slider_1_value = 80.0;
-        let slider_2_state = slider::State::new();
-        let slider_2_value = 80.0;
-        let record_state = button::State::new();
+        let view_state = view::ViewState::new();
         let recording = false;
         let record_sender = None;
-        let play_target_state = button::State::new();
-        let play_source_state = button::State::new();
-        let realtime_record_state = button::State::new();
-        let realtime_recording = false;
         let realtime_record_sender = None;
-        let input_device_list_state = pick_list::State::new();
+        let realtime_recording = false;
         let mut input_device_list_options: Vec<String> = cpal::default_host().input_devices().unwrap().map(|d|d.name().unwrap()).collect();
         input_device_list_options.insert(0, String::from("From file"));
-        let input_browse_state = button::State::new();
-        let input_browse_selected = None;
-        let input_device_list_selected = None;
-        let output_device_list_state = pick_list::State::new();
         let mut output_device_list_options: Vec<String> = cpal::default_host().output_devices().unwrap().map(|d| d.name().unwrap()).collect();
         output_device_list_options.insert(0, String::from("To file"));
-        let output_device_list_selected = None;
-        let output_browse_state = button::State::new();
-        let output_browse_selected = None;
+
+        tch::maybe_init_cuda();
 
         (
             App {
                 models,
-                model_browse_state,
-                model_browse_selected,
-                hifigan_browse_state,
-                hifigan_browse_selected,
-                hubert_browse_state,
-                hubert_browse_selected,
-                show_debug,
-                slider_1_state,
-                slider_1_value,
-                slider_2_state,
-                slider_2_value,
-                record_state,
+                view_state,
+                input_device_list_options,
+                output_device_list_options,
                 recording,
                 record_sender,
-                play_target_state,
-                play_source_state,
-                realtime_record_state,
                 realtime_recording,
                 realtime_record_sender,
-                input_device_list_state,
-                input_device_list_options,
-                input_device_list_selected,
-                input_browse_state,
-                input_browse_selected,
-                output_device_list_state,
-                output_device_list_options,
-                output_device_list_selected,
-                output_browse_state,
-                output_browse_selected,
             },
             Command::none()
         )
@@ -201,21 +138,23 @@ impl Application for App {
         String::from("FakeYou Recast")
     }
 
+    fn view(&mut self) -> Element<Message> { view::view(&mut self.view_state, &self.input_device_list_options, &self.output_device_list_options, self.recording, self.realtime_recording) }
+
     fn update(&mut self, msg: Self::Message) -> Command<Self::Message> {
         match msg {
             Message::ShowDebugPressed => {
-                self.show_debug = !self.show_debug;
+                self.view_state.show_debug = !self.view_state.show_debug;
             }
             Message::Slider1Changed(new_value) => {
-                self.slider_1_value = new_value;
+                self.view_state.slider_1_value = new_value;
                 if self.realtime_record_sender.is_some() {
-                    self.realtime_record_sender.as_ref().unwrap().send((self.realtime_recording.clone(), self.slider_1_value.clone(), self.slider_2_value.clone())).unwrap();
+                    self.realtime_record_sender.as_ref().unwrap().send((self.realtime_recording.clone(), self.view_state.slider_1_value.clone(), self.view_state.slider_2_value.clone())).unwrap();
                 }
             }
             Message::Slider2Changed(new_value) => {
-                self.slider_2_value = new_value;
+                self.view_state.slider_2_value = new_value;
                 if self.realtime_record_sender.is_some() {
-                    self.realtime_record_sender.as_ref().unwrap().send((self.realtime_recording.clone(), self.slider_1_value.clone(), self.slider_2_value.clone())).unwrap();
+                    self.realtime_record_sender.as_ref().unwrap().send((self.realtime_recording.clone(), self.view_state.slider_1_value.clone(), self.view_state.slider_2_value.clone())).unwrap();
                 }
             }
             // Realtime record button => record and playback at the same time
@@ -223,14 +162,14 @@ impl Application for App {
                 if self.realtime_recording {
                     if self.realtime_record_sender.is_some()
                     {
-                        self.realtime_record_sender.as_ref().unwrap().send((false, self.slider_1_value.clone(), self.slider_2_value.clone())).unwrap();
+                        self.realtime_record_sender.as_ref().unwrap().send((false, self.view_state.slider_1_value.clone(), self.view_state.slider_2_value.clone())).unwrap();
                     }
                 } else {
                     let (realtime_record_sender, realtime_record_receiver) = std::sync::mpsc::channel();
                     self.realtime_record_sender = Some(realtime_record_sender);
-                    let input_device_name = self.input_device_list_selected.clone();
-                    let output_device_name = self.output_device_list_selected.clone(); std::thread::spawn(move || { start_realtime_recording(realtime_record_receiver, input_device_name, output_device_name) }); 
-                    self.realtime_record_sender.as_ref().unwrap().send((true, self.slider_1_value.clone(), self.slider_2_value.clone())).unwrap();
+                    let input_device_name = self.view_state.input_device_list_selected.clone();
+                    let output_device_name = self.view_state.output_device_list_selected.clone(); std::thread::spawn(move || { start_realtime_recording(realtime_record_receiver, input_device_name, output_device_name) }); 
+                    self.realtime_record_sender.as_ref().unwrap().send((true, self.view_state.slider_1_value.clone(), self.view_state.slider_2_value.clone())).unwrap();
                 }
 
                 self.realtime_recording = !self.realtime_recording;
@@ -238,31 +177,30 @@ impl Application for App {
             Message::ModelBrowsePressed => { 
                 let path = FileDialog::new()
                     .add_filter("FakeYou Recast Model", &["recast"])
+                    .set_location("./models")
                     .show_open_single_file()
                     .unwrap();
                 match path {
                     Some(p) => {
                         //TODO some kind of loading spinner or something while this is happening
-                        tch::maybe_init_cuda();
-                        let mut models = self.models.clone();
+                        let models = self.models.clone();
                         let path = p.clone();
                         std::thread::spawn(move ||{
                             models.load_acoustic(path)}
                         );
-                        self.model_browse_selected = Some(p.clone());
+                        self.view_state.model_browse_selected = Some(p.clone());
 
-                        let mut models = self.models.clone();
-                        let path = PathBuf::from("./model1.recast_base");
-                        std::thread::spawn(move ||{
-                            models.load_hifigan(path)}
-                        );
-                        self.hifigan_browse_selected = Some(PathBuf::from("./model1.recast_base"));
+                        let models = self.models.clone();
+                        std::thread::spawn(move || {
+                            models.load_hifigan(PathBuf::from("./models/model1.recast_base"))
+                        });
+                        self.view_state.hifigan_browse_selected = Some(PathBuf::from("./models/model1.recast_base"));
 
-                        let mut models = self.models.clone();
+                        let models = self.models.clone();
                         std::thread::spawn(move ||{
-                            models.load_hubert(PathBuf::from("./model2.recast_base"))}
+                            models.load_hubert(PathBuf::from("./models/model2.recast_base"))}
                         );
-                        self.hubert_browse_selected = Some(PathBuf::from("./model2.recast_base"));
+                        self.view_state.hubert_browse_selected = Some(PathBuf::from("./models/model2.recast_base"));
                     },
                     None => {}
                 }
@@ -272,16 +210,17 @@ impl Application for App {
                 let path = FileDialog::new()
                     // Hifigan shhhh
                     .add_filter("Base Model 1", &["pt"])
+                    .set_location("./models")
                     .show_open_single_file()
                     .unwrap();
                 match path {
                     Some(p) => {
-                        let mut models = self.models.clone();
+                        let models = self.models.clone();
                         let path = p.clone();
                         std::thread::spawn(move ||{
                             models.load_hifigan(path)}
                         );
-                        self.hifigan_browse_selected = Some(p.clone());
+                        self.view_state.hifigan_browse_selected = Some(p.clone());
                     },
                     None => {}
                 }
@@ -290,16 +229,17 @@ impl Application for App {
                 let path = FileDialog::new()
                     // Hubert shhhh
                     .add_filter("Base Model 2", &["pt"])
+                    .set_location("./models")
                     .show_open_single_file()
                     .unwrap();
                 match path {
                     Some(p) => {
-                        let mut models = self.models.clone();
+                        let models = self.models.clone();
                         let path = p.clone();
                         std::thread::spawn(move ||{
                             models.load_hubert(path)}
                         );
-                        self.hubert_browse_selected = Some(p.clone());
+                        self.view_state.hubert_browse_selected = Some(p.clone());
                     },
                     None => {}
                 }
@@ -309,69 +249,69 @@ impl Application for App {
                     .add_filter("WAV audio file", &["wav"])
                     .show_open_single_file()
                     .unwrap();
-                self.input_browse_selected = path;
+                self.view_state.input_browse_selected = path;
             }
             Message::OutputBrowsePressed => { 
                 let path = FileDialog::new()
                     .add_filter("WAV audio file", &["wav"])
                     .show_save_single_file()
                     .unwrap();
-                self.output_browse_selected = path;
+                self.view_state.output_browse_selected = path;
             }
             Message::RecordPressed => { 
                 if self.recording {
                     if self.record_sender.is_some()
                     {
-                        self.record_sender.as_ref().unwrap().send((false, self.slider_1_value.clone())).unwrap();
+                        self.record_sender.as_ref().unwrap().send((false, self.view_state.slider_1_value.clone())).unwrap();
                     }
                 } else {
                     let (record_sender, record_receiver) = std::sync::mpsc::channel();
                     self.record_sender = Some(record_sender);
-                    let input_device_name = self.input_device_list_selected.clone();
+                    let input_device_name = self.view_state.input_device_list_selected.clone();
                     std::thread::spawn(move || { start_recording(record_receiver, input_device_name)} ); 
-                    self.record_sender.as_ref().unwrap().send((true, self.slider_1_value.clone())).unwrap();
+                    self.record_sender.as_ref().unwrap().send((true, self.view_state.slider_1_value.clone())).unwrap();
                 }
 
                 self.recording = !self.recording;
 
             }
             Message::PlayTargetPressed => {
-                let output_device_name = self.output_device_list_selected.clone();
+                let output_device_name = self.view_state.output_device_list_selected.clone();
                 let models = self.models.clone();
                 std::thread::spawn(move || {
                     play_target(models, output_device_name)
                 });
             }
             Message::PlaySourcePressed => { 
-                let output_device_name = self.output_device_list_selected.clone();
+                let output_device_name = self.view_state.output_device_list_selected.clone();
                 std::thread::spawn(move || {
                     play_source(output_device_name);
                 });
             }
             Message::InputDeviceChanged(new_device) => {
-                self.input_device_list_selected = Some(new_device);
+                self.view_state.input_device_list_selected = Some(new_device);
                 // Restart recording if currently recording and the device changes
                 if self.realtime_recording {
-                    self.realtime_record_sender.as_ref().unwrap().send((false, self.slider_1_value.clone(), self.slider_2_value.clone())).unwrap();
+                    self.realtime_record_sender.as_ref().unwrap().send((false, self.view_state.slider_1_value.clone(), self.view_state.slider_2_value.clone())).unwrap();
                     let (realtime_record_sender, realtime_record_receiver) = std::sync::mpsc::channel();
                     self.realtime_record_sender = Some(realtime_record_sender);
-                    let input_device_name = self.input_device_list_selected.clone();
-                    let output_device_name = self.output_device_list_selected.clone();
+                    let input_device_name = self.view_state.input_device_list_selected.clone();
+                    let output_device_name = self.view_state.output_device_list_selected.clone();
                     std::thread::spawn(move || { start_realtime_recording(realtime_record_receiver, input_device_name, output_device_name) }); 
-                    self.realtime_record_sender.as_ref().unwrap().send((true, self.slider_1_value.clone(), self.slider_2_value.clone())).unwrap();
+                    self.realtime_record_sender.as_ref().unwrap().send((true, self.view_state.slider_1_value.clone(), self.view_state.slider_2_value.clone())).unwrap();
                 }
             }
             Message::OutputDeviceChanged(new_device) => {
-                self.output_device_list_selected = Some(new_device);
+                self.view_state.output_device_list_selected = Some(new_device);
                 // Restart recording if currently recording and the device changes
                 if self.realtime_recording {
-                    self.realtime_record_sender.as_ref().unwrap().send((false, self.slider_1_value.clone(), self.slider_2_value.clone())).unwrap();
+                    self.realtime_record_sender.as_ref().unwrap().send((false, self.view_state.slider_1_value.clone(), self.view_state.slider_2_value.clone())).unwrap();
                     let (realtime_record_sender, realtime_record_receiver) = std::sync::mpsc::channel();
                     self.realtime_record_sender = Some(realtime_record_sender);
-                    let input_device_name = self.input_device_list_selected.clone();
-                    let output_device_name = self.output_device_list_selected.clone();
+                    let input_device_name = self.view_state.input_device_list_selected.clone();
+                    let output_device_name = self.view_state.output_device_list_selected.clone();
                     std::thread::spawn(move || { start_realtime_recording(realtime_record_receiver, input_device_name, output_device_name) }); 
-                    self.realtime_record_sender.as_ref().unwrap().send((true, self.slider_1_value.clone(), self.slider_2_value.clone())).unwrap();
+                    self.realtime_record_sender.as_ref().unwrap().send((true, self.view_state.slider_1_value.clone(), self.view_state.slider_2_value.clone())).unwrap();
                 }
 
             }
@@ -379,6 +319,7 @@ impl Application for App {
         Command::none()
     }
 
+    /// F12 hotkey for secret options
     fn subscription(&self) -> Subscription<Message> {
         subscription::events_with(|event, status| {
             if let event::Status::Captured = status {
@@ -387,7 +328,7 @@ impl Application for App {
 
             match event {
                 Event::Keyboard(keyboard::Event::KeyPressed {
-                    modifiers,
+                    modifiers: _,
                     key_code,
                 }) => match key_code {
                     KeyCode::F12 => Some(Message::ShowDebugPressed),
@@ -397,118 +338,12 @@ impl Application for App {
             }
         })
     }
-
-    fn view(&mut self) -> Element<Self::Message> {
-        let mut model_selection_row_elems: Vec<Element<Self::Message>> = vec![];
-        let selected_model_str = if self.model_browse_selected.is_none() { "" } else {self.model_browse_selected.as_ref().unwrap().file_stem().unwrap().to_str().unwrap() };
-        let selected_hifigan_str = if self.hifigan_browse_selected.is_none() { "" } else {self.hifigan_browse_selected.as_ref().unwrap().file_stem().unwrap().to_str().unwrap() };
-        let selected_hubert_str = if self.hubert_browse_selected.is_none() { "" } else {self.hubert_browse_selected.as_ref().unwrap().file_stem().unwrap().to_str().unwrap() };
-        model_selection_row_elems
-            .push(Text::new("Select Recast Model File: ").into());
-        model_selection_row_elems
-            .push(Button::new(&mut self.model_browse_state, Text::new("Browse")).on_press(Message::ModelBrowsePressed).into());
-        model_selection_row_elems
-            .push(Text::new(selected_model_str).into());
-        if self.show_debug {
-            model_selection_row_elems
-                .push(Text::new("Select Debug Model 1: ").into());
-            model_selection_row_elems
-                .push(Button::new(&mut self.hifigan_browse_state, Text::new("Browse")).on_press(Message::HifiganBrowsePressed).into());
-            model_selection_row_elems
-            .push(Text::new(selected_hifigan_str).into());
-            model_selection_row_elems
-                .push(Text::new("Select Debug Model 2: ").into());
-            model_selection_row_elems
-                .push(Button::new(&mut self.hubert_browse_state, Text::new("Browse")).on_press(Message::HubertBrowsePressed).into());
-            model_selection_row_elems
-            .push(Text::new(selected_hubert_str).into());
-        }
-        let mut model_selection_row = Row::with_children(model_selection_row_elems);
-
-        let mut file_selection_row_elems: Vec<Element<Self::Message>> = vec![];
-        if self.input_device_list_selected == Some(String::from("From file"))
-        {
-            file_selection_row_elems.push(
-                Text::new("Input File: ").into()
-            );
-            file_selection_row_elems.push(
-                Button::new(&mut self.input_browse_state, Text::new("Browse")).on_press(Message::InputBrowsePressed).into()
-            );
-        }
-        if self.output_device_list_selected == Some(String::from("To file"))
-        {
-            file_selection_row_elems.push(
-                Text::new("Output File: ").into()
-            );
-            file_selection_row_elems.push(
-                Button::new(&mut self.output_browse_state, Text::new("Browse")).on_press(Message::OutputBrowsePressed).into()
-            );
-        }
-        let mut file_selection_row = Row::with_children(file_selection_row_elems);
-
-        let elements = Column::new()
-            .push(model_selection_row)
-            .push(
-                Row::new()
-                .push(Text::new("Input Device: "))
-                .push(
-                    PickList::new(
-                        &mut self.input_device_list_state,
-                        &self.input_device_list_options,
-                        self.input_device_list_selected.clone(),
-                        Message::InputDeviceChanged,
-                    )
-                )
-                .push(Text::new("Output Device: "))
-                .push(
-                    PickList::new(
-                        &mut self.output_device_list_state,
-                        &self.output_device_list_options,
-                        self.output_device_list_selected.clone(),
-                        Message::OutputDeviceChanged,
-                    )
-                )
-            )
-            .push(
-                file_selection_row
-            )
-            .push(
-                Row::new()
-                .push(Text::new("Input Volume: "))
-                .push(
-                    Slider::new(&mut self.slider_1_state, 0.0..=100.0, self.slider_1_value, Message::Slider1Changed)
-                )
-                .push(Text::new("Output Volume: "))
-                .push(
-                    Slider::new(&mut self.slider_2_state, 0.0..=100.0, self.slider_2_value, Message::Slider2Changed)
-                )
-            )
-            .push(
-                Row::new()
-                .push(
-                    Button::new(&mut self.record_state, if self.recording { Text::new("Stop")} else {Text::new("Record")}).on_press(Message::RecordPressed)
-                )
-                .push(
-                    Button::new(&mut self.play_source_state, Text::new("Play Source")).on_press(Message::PlaySourcePressed)
-                )
-                .push(
-                    Button::new(&mut self.play_target_state, Text::new("Play Target")).on_press(Message::PlayTargetPressed)
-                )
-                .push(
-                    Button::new(&mut self.realtime_record_state, if self.realtime_recording { Text::new("Stop") } else {Text::new("Realtime\n(experimental)")}).on_press(Message::RealtimeRecordPressed)
-                )
-
-            );
-
-        elements.into()
-    }
-
 }
 
 /// Realtime record => record and playback at the same time
 fn start_realtime_recording(realtime_record_receiver: std::sync::mpsc::Receiver<(bool, f32, f32)>, input_device_name: Option<String>, output_device_name: Option<String>)  {
-    let input_device = get_input_device(input_device_name).0.unwrap();
-    let output_device = get_output_device(output_device_name).0.unwrap();
+    let input_device = audio::get_input_device(input_device_name).0.unwrap();
+    let output_device = audio::get_output_device(output_device_name).0.unwrap();
 
     // Windows is bad and won't let me request 16KHz input so we'll have to do 48 and drop 2/3 when
     // we pass to the 16khz model
@@ -522,23 +357,22 @@ fn start_realtime_recording(realtime_record_receiver: std::sync::mpsc::Receiver<
         for &sample in data {
             // Don't forget to drop 2/3 of the samples when you go to run the algo on this
             //FIXME unsafe
-            producer.push(apply_volume(sample, unsafe { INPUT_VOLUME })).unwrap();
+            producer.push(audio::apply_volume(sample, unsafe { INPUT_VOLUME })).unwrap();
         }
     };
 
     let output_data_fn = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
         // Expand one sample to 2 to convert 48khz mono to 48khz stereo
-        let mut iter = data.iter_mut(); 
         let mut s: f32 = 0.0;
         for (j, sample) in data.iter_mut().enumerate() {
-            if (j%2==0)
+            if j%2==0
             {
                 match consumer.pop() {
                     Some(sa) => s = sa,
                     None => s = 0.0,
                 }
             }
-            *sample = apply_volume(s, unsafe { OUTPUT_VOLUME});
+            *sample = audio::apply_volume(s, unsafe { OUTPUT_VOLUME});
         }
     };
 
@@ -562,7 +396,7 @@ fn start_realtime_recording(realtime_record_receiver: std::sync::mpsc::Receiver<
 
 /// Record to a buffer for later conversion (non-realtime)
 fn start_recording(record_receiver: std::sync::mpsc::Receiver<(bool, f32)>, input_device_name: Option<String>)  {
-    let input_device = get_input_device(input_device_name).0.unwrap();
+    let input_device = audio::get_input_device(input_device_name).0.unwrap();
     let input_config = cpal::StreamConfig { channels: 1, sample_rate: SampleRate(48000), buffer_size: BufferSize::Default };
     unsafe { RECORD_BUF = [0f32; 319507] };
     unsafe { RECORD_SAMPLE_COUNT = 0 };
@@ -572,7 +406,7 @@ fn start_recording(record_receiver: std::sync::mpsc::Receiver<(bool, f32)>, inpu
             // Drop 2/3 of the samples to make 16KHz
             if j % 3== 0 {
                 //FIXME unsafe
-               unsafe{ RECORD_BUF[i] = apply_volume(sample, INPUT_VOLUME ) };
+               unsafe{ RECORD_BUF[i] = audio::apply_volume(sample, INPUT_VOLUME ) };
                unsafe { RECORD_SAMPLE_COUNT = i};
                i += 1;
                //FIXME overflow
@@ -595,16 +429,16 @@ fn start_recording(record_receiver: std::sync::mpsc::Receiver<(bool, f32)>, inpu
     }
 }
 
+/// Play back the input buffer
 fn play_source(output_device_name: Option<String>) {
-    let output_device = get_output_device(output_device_name).0.unwrap();
+    let output_device = audio::get_output_device(output_device_name).0.unwrap();
     let output_config = cpal::StreamConfig { channels: 2, sample_rate: SampleRate(48000), buffer_size: BufferSize::Default };
 
     let mut i = 0;
     let output_data_fn = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-        let mut iter = data.iter_mut(); 
         for (j, sample) in data.iter_mut().enumerate() {
             let s = unsafe { RECORD_BUF[i] };
-            *sample = apply_volume(s, unsafe { OUTPUT_VOLUME});
+            *sample = audio::apply_volume(s, unsafe { OUTPUT_VOLUME});
             // Expand one sample to 6 to convert 16khz mono to 48khz stereo
             if j%6 == 5 && i < 319507
             {
@@ -617,9 +451,15 @@ fn play_source(output_device_name: Option<String>) {
 
     output_stream.play().unwrap();
     // FIXME ¯\_(ツ)_/¯
+    // the goal of this is to stop playback before we run out of samples but it's super kludgey
     std::thread::sleep(core::time::Duration::from_secs(19));
 }
 
+/// Convert and play back the input buffer with the target voice
+/// Still undecided if we should separate the conversion to another button
+/// If the conversion is fast enough, we don't need to worry too much about
+/// redoing it when the user wants to hear the same input twice.
+/// If we are too slow, it could be a nice time saver for that case though.
 fn play_target(models: Models, output_device_name: Option<String>) {
     //TODO some kind of loading spinner or something while this is happening
     let mut wav_data = unsafe { RECORD_BUF.to_vec() };
@@ -649,7 +489,7 @@ fn play_target(models: Models, output_device_name: Option<String>) {
     if cfg!(debug_assertions) {
         println!("generate: {:?}", generate_output.size());
     }
-    let mut transpose_output = generate_output.transpose(1, 2);
+    let transpose_output = generate_output.transpose(1, 2);
     if cfg!(debug_assertions) {
         println!("transpose: {:?}", transpose_output.size());
     }
@@ -692,10 +532,9 @@ fn play_target(models: Models, output_device_name: Option<String>) {
 
     let mut i = 0;
     let output_data_fn = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-        let mut iter = data.iter_mut(); 
         for (j, sample) in data.iter_mut().enumerate() {
             let s = sample_buf[i];
-            *sample = apply_volume(s, unsafe { OUTPUT_VOLUME});
+            *sample = audio::apply_volume(s, unsafe { OUTPUT_VOLUME});
             // expand one sample to 6 to convert 16khz mono to 48khz stereo
             if j%6 == 5 && i < unsafe { RECORD_SAMPLE_COUNT } as usize
             {
@@ -704,87 +543,18 @@ fn play_target(models: Models, output_device_name: Option<String>) {
         }
     };
 
-    let output_device = get_output_device(output_device_name).0.unwrap();
+    let output_device = audio::get_output_device(output_device_name).0.unwrap();
     let output_config = cpal::StreamConfig { channels: 2, sample_rate: SampleRate(48000), buffer_size: BufferSize::Default };
 
     let output_stream = output_device.build_output_stream(&output_config, output_data_fn, err_fn).unwrap();
 
     output_stream.play().unwrap();
     // FIXME ¯\_(ツ)_/¯
+    // the goal of this is to stop playback before we run out of samples but it's super kludgey
     std::thread::sleep(core::time::Duration::from_secs_f32(unsafe { RECORD_SAMPLE_COUNT } as f32 / 16000.0 - 0.3));
-}
-
-fn get_input_device(input_device_name: Option<String>) -> (Option<cpal::Device>, Option<File>) {
-    let mut input_device: Option<cpal::Device> = None;
-    let mut file: Option<std::fs::File> = None;
-    if let Some(input_device_name) = input_device_name {
-        if input_device_name == "From file" {
-            todo!() 
-        }
-        else {
-            let host = cpal::default_host();
-            //FIXME better unique identifier than the name of the device?
-            //or maybe it's guaranteed unique already idk
-            let input_device_foo = host.input_devices().unwrap().filter(|d| d.name().unwrap() == input_device_name).next().unwrap();
-            if cfg!(debug_assertions)
-            {
-                for config in input_device_foo.supported_input_configs().unwrap() {
-                    println!("{:?}", config);
-                }
-            }
-            input_device = Some(input_device_foo)
-        }
-    }
-    else {
-        input_device = Some(cpal::default_host().default_input_device().unwrap());
-        if cfg!(debug_assertions)
-        {
-            for config in input_device.as_ref().unwrap().supported_input_configs().unwrap() {
-                println!("{:?}", config);
-            }
-        }
-    }
-    (input_device, file)
-}
-
-fn get_output_device(output_device_name: Option<String>) -> (Option<cpal::Device>, Option<File>) {
-    let mut output_device: Option<cpal::Device> = None;
-    let mut file: Option<std::fs::File> = None;
-    if let Some(output_device_name) = output_device_name {
-        if output_device_name == "From file" {
-            todo!() 
-        }
-        else {
-            let host = cpal::default_host();
-            //FIXME better unique identifier than the name of the device?
-            //or maybe it's guaranteed unique already idk
-            let output_device_foo = host.output_devices().unwrap().filter(|d| d.name().unwrap() == output_device_name).next().unwrap();
-            if cfg!(debug_assertions)
-            {
-                for config in output_device_foo.supported_output_configs().unwrap() {
-                    println!("{:?}", config);
-                }
-            }
-            output_device = Some(output_device_foo)
-
-        }
-    }
-    else {
-        output_device = Some(cpal::default_host().default_output_device().unwrap());
-    }
-    (output_device, file)
-}
-
-fn apply_volume(sample: f32, volume: f32) -> f32 {
-    let db = (-90.0) + (30.0 - (-90.0)) * ( volume  / 100.0);
-    let mut scale = (db/20.0 * (30.0f32).log10()).exp();
-    if volume == 0.0 { scale = 0.0 };
-    sample * scale
 }
 
 
 fn err_fn(err: cpal::StreamError) {
     eprintln!("Error: {:?}", err);
 }
-
-
