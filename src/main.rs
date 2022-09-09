@@ -1,5 +1,3 @@
-#![feature(associated_type_defaults)]
-
 use std::path::PathBuf;
 use iced::{executor, Application, Element, Command, Settings, window, Subscription, keyboard::{self, KeyCode}};
 use iced_native::{event, subscription, Event};
