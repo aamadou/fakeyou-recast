@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 use iced::{executor, Application, Element, Command, Settings, window, Subscription, keyboard::{self, KeyCode}};
 use iced_native::{event, subscription, Event};
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleRate, BufferSize};
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use ringbuf::RingBuffer;
 use native_dialog::FileDialog;
 
@@ -118,12 +118,19 @@ impl Application for App {
             }
             Message::Slider1Changed(new_value) => {
                 self.view_state.slider_1_value = new_value;
+                //FIXME unsafe and stupid
+                unsafe { INPUT_VOLUME = new_value };
                 if self.realtime_record_sender.is_some() {
                     self.realtime_record_sender.as_ref().unwrap().send((self.realtime_recording.clone(), self.view_state.slider_1_value.clone(), self.view_state.slider_2_value.clone())).unwrap();
+                }
+                if self.record_sender.is_some() {
+                    self.record_sender.as_ref().unwrap().send((self.recording.clone(), self.view_state.slider_1_value.clone())).unwrap();
                 }
             }
             Message::Slider2Changed(new_value) => {
                 self.view_state.slider_2_value = new_value;
+                //FIXME unsafe and stupid
+                unsafe { OUTPUT_VOLUME  = new_value };
                 if self.realtime_record_sender.is_some() {
                     self.realtime_record_sender.as_ref().unwrap().send((self.realtime_recording.clone(), self.view_state.slider_1_value.clone(), self.view_state.slider_2_value.clone())).unwrap();
                 }
@@ -139,7 +146,11 @@ impl Application for App {
                     let (realtime_record_sender, realtime_record_receiver) = std::sync::mpsc::channel();
                     self.realtime_record_sender = Some(realtime_record_sender);
                     let input_device_name = self.view_state.input_device_list_selected.clone();
-                    let output_device_name = self.view_state.output_device_list_selected.clone(); std::thread::spawn(move || { start_realtime_recording(realtime_record_receiver, input_device_name, output_device_name) }); 
+                    let output_device_name = self.view_state.output_device_list_selected.clone();
+                    let hubert = self.hubert.clone();
+                    let acoustic = self.acoustic.clone();
+                    let hifigan = self.hifigan.clone();
+                    std::thread::spawn(move || { start_realtime(realtime_record_receiver, input_device_name, output_device_name, hubert, acoustic, hifigan) }); 
                     self.realtime_record_sender.as_ref().unwrap().send((true, self.view_state.slider_1_value.clone(), self.view_state.slider_2_value.clone())).unwrap();
                 }
 
@@ -239,7 +250,7 @@ impl Application for App {
                     let (record_sender, record_receiver) = std::sync::mpsc::channel();
                     self.record_sender = Some(record_sender);
                     let input_device_name = self.view_state.input_device_list_selected.clone();
-                    std::thread::spawn(move || { start_recording(record_receiver, input_device_name)} ); 
+                    std::thread::spawn(move || { start_recording(input_device_name, record_receiver)} ); 
                     self.record_sender.as_ref().unwrap().send((true, self.view_state.slider_1_value.clone())).unwrap();
                 }
 
@@ -264,28 +275,28 @@ impl Application for App {
             Message::InputDeviceChanged(new_device) => {
                 self.view_state.input_device_list_selected = Some(new_device);
                 // Restart recording if currently recording and the device changes
-                if self.realtime_recording {
-                    self.realtime_record_sender.as_ref().unwrap().send((false, self.view_state.slider_1_value.clone(), self.view_state.slider_2_value.clone())).unwrap();
-                    let (realtime_record_sender, realtime_record_receiver) = std::sync::mpsc::channel();
-                    self.realtime_record_sender = Some(realtime_record_sender);
-                    let input_device_name = self.view_state.input_device_list_selected.clone();
-                    let output_device_name = self.view_state.output_device_list_selected.clone();
-                    std::thread::spawn(move || { start_realtime_recording(realtime_record_receiver, input_device_name, output_device_name) }); 
-                    self.realtime_record_sender.as_ref().unwrap().send((true, self.view_state.slider_1_value.clone(), self.view_state.slider_2_value.clone())).unwrap();
-                }
+                //if self.realtime_recording {
+                    //self.realtime_record_sender.as_ref().unwrap().send((false, self.view_state.slider_1_value.clone(), self.view_state.slider_2_value.clone())).unwrap();
+                    //let (realtime_record_sender, realtime_record_receiver) = std::sync::mpsc::channel();
+                    //self.realtime_record_sender = Some(realtime_record_sender);
+                    //let input_device_name = self.view_state.input_device_list_selected.clone();
+                    //let output_device_name = self.view_state.output_device_list_selected.clone();
+                    //std::thread::spawn(move || { start_realtime(realtime_record_receiver, input_device_name, output_device_name) }); 
+                    //self.realtime_record_sender.as_ref().unwrap().send((true, self.view_state.slider_1_value.clone(), self.view_state.slider_2_value.clone())).unwrap();
+                //}
             }
             Message::OutputDeviceChanged(new_device) => {
                 self.view_state.output_device_list_selected = Some(new_device);
                 // Restart recording if currently recording and the device changes
-                if self.realtime_recording {
-                    self.realtime_record_sender.as_ref().unwrap().send((false, self.view_state.slider_1_value.clone(), self.view_state.slider_2_value.clone())).unwrap();
-                    let (realtime_record_sender, realtime_record_receiver) = std::sync::mpsc::channel();
-                    self.realtime_record_sender = Some(realtime_record_sender);
-                    let input_device_name = self.view_state.input_device_list_selected.clone();
-                    let output_device_name = self.view_state.output_device_list_selected.clone();
-                    std::thread::spawn(move || { start_realtime_recording(realtime_record_receiver, input_device_name, output_device_name) }); 
-                    self.realtime_record_sender.as_ref().unwrap().send((true, self.view_state.slider_1_value.clone(), self.view_state.slider_2_value.clone())).unwrap();
-                }
+                //if self.realtime_recording {
+                    //self.realtime_record_sender.as_ref().unwrap().send((false, self.view_state.slider_1_value.clone(), self.view_state.slider_2_value.clone())).unwrap();
+                    //let (realtime_record_sender, realtime_record_receiver) = std::sync::mpsc::channel();
+                    //self.realtime_record_sender = Some(realtime_record_sender);
+                    //let input_device_name = self.view_state.input_device_list_selected.clone();
+                    //let output_device_name = self.view_state.output_device_list_selected.clone();
+                    //std::thread::spawn(move || { start_realtime(realtime_record_receiver, input_device_name, output_device_name) }); 
+                    //self.realtime_record_sender.as_ref().unwrap().send((true, self.view_state.slider_1_value.clone(), self.view_state.slider_2_value.clone())).unwrap();
+                //}
 
             }
         }
@@ -313,32 +324,45 @@ impl Application for App {
     }
 }
 
+static mut REALTIME_BUF: [f32; 8192] = [0.0; 8192];
+
+//FIXME break this up and move parts of it into audio.rs
 /// Realtime record => record and playback at the same time
-fn start_realtime_recording(realtime_record_receiver: std::sync::mpsc::Receiver<(bool, f32, f32)>, input_device_name: Option<String>, output_device_name: Option<String>)  {
+fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32, f32)>, input_device_name: Option<String>, output_device_name: Option<String>, hubert: softvc::Hubert, acoustic: softvc::Acoustic, hifigan: softvc::Hifigan)
+{
     let input_device = audio::get_input_device(input_device_name).0.unwrap();
     let output_device = audio::get_output_device(output_device_name).0.unwrap();
 
     // Windows is bad and won't let me request 16KHz input so we'll have to do 48 and drop 2/3 when
     // we pass to the 16khz model
-    let input_config = cpal::StreamConfig { channels: 1, sample_rate: SampleRate(48000), buffer_size: BufferSize::Default };
-    let output_config = cpal::StreamConfig { channels: 2, sample_rate: SampleRate(48000), buffer_size: BufferSize::Default };
-    let ring = RingBuffer::new(100_000);
+    let input_config = cpal::StreamConfig { channels: 1, sample_rate: SampleRate(48000), buffer_size: BufferSize::Fixed(8192) };
+    let output_config = cpal::StreamConfig { channels: 2, sample_rate: SampleRate(48000), buffer_size: BufferSize::Fixed(8192) };
+    let ring = RingBuffer::new(32768);
     let (mut producer, mut consumer) = ring.split();
     
 
+    let mut i = 0;
     let input_data_fn = move |data: &[f32], _: &cpal::InputCallbackInfo| {
-        for &sample in data {
-            // Don't forget to drop 2/3 of the samples when you go to run the algo on this
-            //FIXME unsafe
-            producer.push(audio::apply_volume(sample, unsafe { INPUT_VOLUME })).unwrap();
+
+        for (j, &sample) in data.iter().enumerate() {
+            // Drop 2/3 of the samples to make 16KHz
+            if j % 3 == 0 && i < 8192 {
+                unsafe { REALTIME_BUF[i] = sample };
+                i+= 1;
+            }
+        }
+        if i >= 8192 {
+            let converted = softvc::inference(Box::new(unsafe { REALTIME_BUF}), hubert.clone(), acoustic.clone(), hifigan.clone());
+            producer.push_slice(&converted);
+            i = 0
         }
     };
 
     let output_data_fn = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-        // Expand one sample to 2 to convert 48khz mono to 48khz stereo
+        // Expand one sample to 6 to convert 16khz mono to 48khz stereo
         let mut s: f32 = 0.0;
         for (j, sample) in data.iter_mut().enumerate() {
-            if j%2==0
+            if j%6==0
             {
                 match consumer.pop() {
                     Some(sa) => s = sa,
@@ -349,18 +373,17 @@ fn start_realtime_recording(realtime_record_receiver: std::sync::mpsc::Receiver<
         }
     };
 
-    let input_stream = input_device.build_input_stream(&input_config, input_data_fn, err_fn).unwrap();
-    let output_stream = output_device.build_output_stream(&output_config, output_data_fn, err_fn).unwrap();
+    let input_stream = input_device.build_input_stream(&input_config, input_data_fn, audio::err_fn).unwrap();
+    let output_stream = output_device.build_output_stream(&output_config, output_data_fn, audio::err_fn).unwrap();
 
     input_stream.play().unwrap();
     output_stream.play().unwrap();
     loop {
-        let (realtime_recording, ivol, ovol) = realtime_record_receiver.recv().unwrap();
+        let (realtime_recording, ivol, ovol) = realtime_receiver.recv().unwrap();
         if realtime_recording {
             //FIXME unsafe
             unsafe { INPUT_VOLUME = ivol };
             unsafe { OUTPUT_VOLUME = ovol };
-            std::thread::sleep(std::time::Duration::from_millis(50));
         } else {
             break
         }
@@ -368,64 +391,17 @@ fn start_realtime_recording(realtime_record_receiver: std::sync::mpsc::Receiver<
 }
 
 /// Record to a buffer for later conversion (non-realtime)
-fn start_recording(record_receiver: std::sync::mpsc::Receiver<(bool, f32)>, input_device_name: Option<String>)  {
-    let input_device = audio::get_input_device(input_device_name).0.unwrap();
-    let input_config = cpal::StreamConfig { channels: 1, sample_rate: SampleRate(48000), buffer_size: BufferSize::Default };
-    unsafe { RECORD_BUF = [0.0; WAV_TENSOR_SIZE] };
-    unsafe { RECORD_SAMPLE_COUNT = 0 };
-    let mut i = 0;
-    let input_data_fn = move |data: &[f32], _: &cpal::InputCallbackInfo| {
-        for (j, &sample) in data.iter().enumerate() {
-            // Drop 2/3 of the samples to make 16KHz
-            if j % 3== 0 {
-                //FIXME unsafe
-               unsafe{ RECORD_BUF[i] = audio::apply_volume(sample, INPUT_VOLUME ) };
-               unsafe { RECORD_SAMPLE_COUNT = i};
-               i += 1;
-               //FIXME overflow
-           }
-        }
-    };
-
-    let input_stream = input_device.build_input_stream(&input_config, input_data_fn, err_fn).unwrap();
-
-    input_stream.play().unwrap();
-    loop {
-        let (recording, ivol) = record_receiver.recv().unwrap();
-        if recording {
-            //FIXME unsafe
-            unsafe { INPUT_VOLUME = ivol };
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        } else {
-            break;
-        }
-    }
+fn start_recording(input_device_name: Option<String>, receiver: std::sync::mpsc::Receiver<(bool, f32)>)  {
+    let mut vec = audio::record_audio_vec(input_device_name, receiver);
+    //FIXME unsafe and bad
+    unsafe { RECORD_SAMPLE_COUNT = vec.len() };
+    vec.resize(WAV_TENSOR_SIZE, 0.0);
+    unsafe { RECORD_BUF.copy_from_slice(&vec.as_slice()) };
 }
 
 /// Play back the input buffer
 fn play_source(output_device_name: Option<String>) {
-    let output_device = audio::get_output_device(output_device_name).0.unwrap();
-    let output_config = cpal::StreamConfig { channels: 2, sample_rate: SampleRate(48000), buffer_size: BufferSize::Default };
-
-    let mut i = 0;
-    let output_data_fn = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-        for (j, sample) in data.iter_mut().enumerate() {
-            let s = unsafe { RECORD_BUF[i] };
-            *sample = audio::apply_volume(s, unsafe { OUTPUT_VOLUME});
-            // Expand one sample to 6 to convert 16khz mono to 48khz stereo
-            if j%6 == 5 && i < WAV_TENSOR_SIZE
-            {
-                i += 1;
-            }
-        }
-    };
-
-    let output_stream = output_device.build_output_stream(&output_config, output_data_fn, err_fn).unwrap();
-
-    output_stream.play().unwrap();
-    // FIXME ¯\_(ツ)_/¯
-    // the goal of this is to stop playback before we run out of samples but it's super kludgey
-    std::thread::sleep(core::time::Duration::from_secs(19));
+    audio::play_audio_buf(output_device_name, (unsafe { &RECORD_BUF }), unsafe { OUTPUT_VOLUME });
 }
 
 /// Convert and play back the input buffer with the target voice
@@ -466,7 +442,7 @@ fn play_target(hubert: softvc::Hubert, acoustic: softvc::Acoustic, hifigan: soft
     let output_device = audio::get_output_device(output_device_name).0.unwrap();
     let output_config = cpal::StreamConfig { channels: 2, sample_rate: SampleRate(48000), buffer_size: BufferSize::Default };
 
-    let output_stream = output_device.build_output_stream(&output_config, output_data_fn, err_fn).unwrap();
+    let output_stream = output_device.build_output_stream(&output_config, output_data_fn, audio::err_fn).unwrap();
 
     output_stream.play().unwrap();
     // FIXME ¯\_(ツ)_/¯
@@ -475,6 +451,3 @@ fn play_target(hubert: softvc::Hubert, acoustic: softvc::Acoustic, hifigan: soft
 }
 
 
-fn err_fn(err: cpal::StreamError) {
-    eprintln!("Error: {:?}", err);
-}
