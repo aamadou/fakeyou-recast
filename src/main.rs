@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, env};
 use iced::{executor, Application, Element, Command, Settings, window, Subscription, keyboard::{self, KeyCode}};
 use iced_native::{event, subscription, Event};
 use cpal::{SampleRate, BufferSize};
@@ -31,8 +31,8 @@ pub enum AppError {
     NoModel,
     #[error("Inference failed to produce an output")]
     ModelError,
-    #[error("File picker dialog failed to open")]
-    FileDialogError,
+    #[error("File picker dialog failed to open for path:\n{0}")]
+    FileDialogError(PathBuf),
 }
 
 mod view;
@@ -194,73 +194,99 @@ impl Application for App {
                 self.realtime_recording = !self.realtime_recording;
             }
             Message::ModelBrowsePressed => { 
-                let path = FileDialog::new()
-                    .add_filter("FakeYou Recast Model", &["recast"])
-                    .set_location("./models")
-                    .show_open_single_file();
-                match path {
-                    Ok(Some(p)) => {
-                        //TODO some kind of loading spinner or something while this is happening
-                        let acoustic = self.acoustic.clone();
-                        let path = p.clone();
-                        std::thread::spawn(move ||{
-                            acoustic.load(path)}
-                        );
-                        self.view_state.model_browse_selected = Some(p.clone());
-
-                        let hifigan = self.hifigan.clone();
-                        std::thread::spawn(move || {
-                            hifigan.load(PathBuf::from("./models/model1.recast_base"))
-                        });
-                        self.view_state.hifigan_browse_selected = Some(PathBuf::from("./models/model1.recast_base"));
-
-                        let hubert = self.hubert.clone();
-                        std::thread::spawn(move ||{
-                            hubert.load(PathBuf::from("./models/model2.recast_base"))}
-                        );
-                        self.view_state.hubert_browse_selected = Some(PathBuf::from("./models/model2.recast_base"));
-                    },
-                    Ok(None) => {},
-                    Err(_e) => { handle_errors(Err(AppError::FileDialogError)); }
+                let location = std::env::current_dir();
+                if location.is_err() {
+                    // how does this even happen?
+                    handle_errors(Err(AppError::FileDialogError(PathBuf::from(""))));
                 }
-                //FIXME some kind of progress bar while all this crap loads
+                else {
+                    let mut location = location.unwrap();
+                    location.push("models");
+                    let path = FileDialog::new()
+                    .add_filter("FakeYou Recast Model", &["recast"])
+                    .set_location(&location)
+                    .show_open_single_file();
+                    match path {
+                        Ok(Some(p)) => {
+                            let acoustic = self.acoustic.clone();
+                            let path = p.clone();
+                            std::thread::spawn(move ||{
+                                acoustic.load(path)}
+                            );
+                            self.view_state.model_browse_selected = Some(p.clone());
+
+                            let hifigan = self.hifigan.clone();
+                            std::thread::spawn(move || {
+                                hifigan.load(PathBuf::from("./models/model1.recast_base"))
+                            });
+                            self.view_state.hifigan_browse_selected = Some(PathBuf::from("./models/model1.recast_base"));
+
+                            let hubert = self.hubert.clone();
+                            std::thread::spawn(move ||{
+                                hubert.load(PathBuf::from("./models/model2.recast_base"))}
+                            );
+                            self.view_state.hubert_browse_selected = Some(PathBuf::from("./models/model2.recast_base"));
+                        },
+                        Ok(None) => {},
+                        Err(_e) => { handle_errors(Err(AppError::FileDialogError(location))); }
+                    }
+                    //FIXME some kind of progress bar while all this crap loads
+                }
             }
             Message::HifiganBrowsePressed => { 
-                let path = FileDialog::new()
-                    // Hifigan shhhh
-                    .add_filter("Base Model 1", &["pt"])
-                    .set_location("./models")
-                    .show_open_single_file();
-                match path {
-                    Ok(Some(p)) => {
-                        let hifigan = self.hifigan.clone();
-                        let path = p.clone();
-                        std::thread::spawn(move ||{
-                            hifigan.load(path)}
-                        );
-                        self.view_state.hifigan_browse_selected = Some(p.clone());
-                    },
-                    Ok(None) => {},
-                    Err(_e) => { handle_errors(Err(AppError::FileDialogError)); }
+                let location = std::env::current_dir();
+                if location.is_err() {
+                    // how does this even happen?
+                    handle_errors(Err(AppError::FileDialogError(PathBuf::from(""))));
+                }
+                else {
+                    let mut location = location.unwrap();
+                    location.push("models");
+                    let path = FileDialog::new()
+                        // Hifigan shhhh
+                        .add_filter("Base Model 1", &["pt"])
+                        .set_location(&location)
+                        .show_open_single_file();
+                    match path {
+                        Ok(Some(p)) => {
+                            let hifigan = self.hifigan.clone();
+                            let path = p.clone();
+                            std::thread::spawn(move ||{
+                                hifigan.load(path)}
+                            );
+                            self.view_state.hifigan_browse_selected = Some(p.clone());
+                        },
+                        Ok(None) => {},
+                        Err(_e) => { handle_errors(Err(AppError::FileDialogError(location))); }
+                    }
                 }
             }
             Message::HubertBrowsePressed => { 
-                let path = FileDialog::new()
-                    // Hubert shhhh
-                    .add_filter("Base Model 2", &["pt"])
-                    .set_location("./models")
-                    .show_open_single_file();
-                match path {
-                    Ok(Some(p)) => {
-                        let hubert = self.hubert.clone();
-                        let path = p.clone();
-                        std::thread::spawn(move ||{
-                            hubert.load(path)}
-                        );
-                        self.view_state.hubert_browse_selected = Some(p.clone());
-                    },
-                    Ok(None) => {}
-                    Err(_e) => { handle_errors(Err(AppError::FileDialogError)); }
+                let location = std::env::current_dir();
+                if location.is_err() {
+                    // how does this even happen?
+                    handle_errors(Err(AppError::FileDialogError(PathBuf::from(""))));
+                }
+                else {
+                    let mut location = location.unwrap();
+                    location.push("models");
+                    let path = FileDialog::new()
+                        // Hubert shhhh
+                        .add_filter("Base Model 2", &["pt"])
+                        .set_location(&location)
+                        .show_open_single_file();
+                    match path {
+                        Ok(Some(p)) => {
+                            let hubert = self.hubert.clone();
+                            let path = p.clone();
+                            std::thread::spawn(move ||{
+                                hubert.load(path)}
+                            );
+                            self.view_state.hubert_browse_selected = Some(p.clone());
+                        },
+                        Ok(None) => {}
+                        Err(_e) => { handle_errors(Err(AppError::FileDialogError(location))); }
+                    }
                 }
             }
             Message::InputBrowsePressed => { 
@@ -271,7 +297,7 @@ impl Application for App {
                     Ok(o) => {
                         self.view_state.input_browse_selected = o;
                     },
-                    Err(_e) => { handle_errors(Err(AppError::FileDialogError)); }
+                    Err(_e) => { handle_errors(Err(AppError::FileDialogError(PathBuf::from("")))); }
                 }
             }
             Message::OutputBrowsePressed => { 
@@ -282,7 +308,7 @@ impl Application for App {
                     Ok(o) => {
                         self.view_state.input_browse_selected = o;
                     },
-                    Err(_e) => { handle_errors(Err(AppError::FileDialogError)); }
+                    Err(_e) => { handle_errors(Err(AppError::FileDialogError(PathBuf::from("")))); }
                 }
             }
             Message::RecordPressed => { 
