@@ -83,9 +83,10 @@ impl ViewState{
 }
 pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a Vec<String>, output_device_list_options: &'a Vec<String>, recording: bool, realtime_recording: bool) -> Element<'a, Message> {
     let mut model_selection_row_elems: Vec<Element<Message>> = vec![];
-    let selected_model_str = if view_state.model_browse_selected.is_none() { "" } else {view_state.model_browse_selected.as_ref().unwrap().file_stem().unwrap().to_str().unwrap() };
-    let selected_hifigan_str = if view_state.hifigan_browse_selected.is_none() { "" } else {view_state.hifigan_browse_selected.as_ref().unwrap().file_stem().unwrap().to_str().unwrap() };
-    let selected_hubert_str = if view_state.hubert_browse_selected.is_none() { "" } else {view_state.hubert_browse_selected.as_ref().unwrap().file_stem().unwrap().to_str().unwrap() };
+    let empty_pathbuf = PathBuf::from("");
+    let selected_model_str = if view_state.model_browse_selected.is_none() { "" } else {view_state.model_browse_selected.as_ref().unwrap_or(&empty_pathbuf).file_stem().unwrap_or_default().to_str().unwrap_or_default() };
+    let selected_hifigan_str = if view_state.hifigan_browse_selected.is_none() { "" } else {view_state.hifigan_browse_selected.as_ref().unwrap_or(&empty_pathbuf).file_stem().unwrap_or_default().to_str().unwrap_or_default() };
+    let selected_hubert_str = if view_state.hubert_browse_selected.is_none() { "" } else {view_state.hubert_browse_selected.as_ref().unwrap_or(&empty_pathbuf).file_stem().unwrap_or_default().to_str().unwrap_or_default() };
     model_selection_row_elems
         .push(Text::new("Select Recast Model File: ").into());
     model_selection_row_elems

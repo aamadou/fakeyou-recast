@@ -1,7 +1,26 @@
 use std::fs::File;
 use cpal::{self, SampleRate, BufferSize, traits::{DeviceTrait, HostTrait, StreamTrait}};
+use crate::AppError;
 
-pub fn get_input_device(input_device_name: Option<String>) -> (Option<cpal::Device>, Option<File>) {
+pub fn get_input_device_list() -> Vec<String> {
+    let input_devices = cpal::default_host().input_devices();
+    if input_devices.is_err() {
+        Vec::new()
+    } else {
+        input_devices.unwrap().map(|d| d.name().unwrap_or_default()).collect()
+    }
+}
+
+pub fn get_output_device_list() -> Vec<String> {
+    let output_devices = cpal::default_host().output_devices();
+    if output_devices.is_err() {
+        Vec::new()
+    } else {
+        output_devices.unwrap().map(|d| d.name().unwrap_or_default()).collect()
+    }
+}
+
+pub fn get_input_device(input_device_name: Option<String>) -> Result<(Option<cpal::Device>, Option<File>), AppError> {
     let input_device: Option<cpal::Device>;
     let file: Option<std::fs::File> = None;
     if let Some(input_device_name) = input_device_name {
@@ -12,10 +31,13 @@ pub fn get_input_device(input_device_name: Option<String>) -> (Option<cpal::Devi
             let host = cpal::default_host();
             //FIXME better unique identifier than the name of the device?
             //or maybe it's guaranteed unique already idk
-            let input_device_foo = host.input_devices().unwrap().filter(|d| d.name().unwrap() == input_device_name).next().unwrap();
+            let input_device_foo = host.input_devices()
+                .map_err(|_e| AppError::NoDevice("input"))?
+                .filter(|d| d.name().unwrap_or(String::from("")) == input_device_name)
+                .next().ok_or(AppError::NoDevice("input"))?;
             if cfg!(debug_assertions)
             {
-                for config in input_device_foo.supported_input_configs().unwrap() {
+                for config in input_device_foo.supported_input_configs().map_err(|_e| AppError::NoDevice("input"))? {
                     // This print can get pretty spammy, but it's helpful for debug sometimes, idk
                     println!("{:?}", config);
                 }
@@ -24,18 +46,20 @@ pub fn get_input_device(input_device_name: Option<String>) -> (Option<cpal::Devi
         }
     }
     else {
-        input_device = Some(cpal::default_host().default_input_device().unwrap());
+        input_device = cpal::default_host().default_input_device();
         if cfg!(debug_assertions)
         {
-            for config in input_device.as_ref().unwrap().supported_input_configs().unwrap() {
-                println!("{:?}", config);
+            if input_device.is_some() {
+                for config in input_device.as_ref().ok_or(AppError::NoDevice("input"))?.supported_input_configs().map_err(|_e| AppError::NoDevice("input"))? {
+                    println!("{:?}", config);
+                }
             }
         }
     }
-    (input_device, file)
+    Ok((input_device, file))
 }
 
-pub fn get_output_device(output_device_name: Option<String>) -> (Option<cpal::Device>, Option<File>) {
+pub fn get_output_device(output_device_name: Option<String>) -> Result<(Option<cpal::Device>, Option<File>), AppError> {
     let output_device: Option<cpal::Device>;
     let file: Option<std::fs::File> = None;
     if let Some(output_device_name) = output_device_name {
@@ -46,22 +70,33 @@ pub fn get_output_device(output_device_name: Option<String>) -> (Option<cpal::De
             let host = cpal::default_host();
             //FIXME better unique identifier than the name of the device?
             //or maybe it's guaranteed unique already idk
-            let output_device_foo = host.output_devices().unwrap().filter(|d| d.name().unwrap() == output_device_name).next().unwrap();
+            let output_device_foo = host.output_devices()
+                .map_err(|_e| AppError::NoDevice("output"))?
+                .filter(|d| d.name().unwrap_or(String::from("")) == output_device_name)
+                .next().ok_or(AppError::NoDevice("output"))?;
             if cfg!(debug_assertions)
             {
-                for config in output_device_foo.supported_output_configs().unwrap() {
+                for config in output_device_foo.supported_output_configs().map_err(|_e| AppError::NoDevice("output"))? {
                     // This print can get pretty spammy, but it's helpful for debug sometimes, idk
                     println!("{:?}", config);
                 }
             }
             output_device = Some(output_device_foo)
-
         }
     }
     else {
-        output_device = Some(cpal::default_host().default_output_device().unwrap());
+        output_device = cpal::default_host().default_output_device();
+        if cfg!(debug_assertions)
+        {
+            if output_device.is_some() {
+                for config in output_device.as_ref().ok_or(AppError::NoDevice("output"))?.supported_output_configs().map_err(|_e| AppError::NoDevice("output"))? {
+                    // This print can get pretty spammy, but it's helpful for debug sometimes, idk
+                    println!("{:?}", config);
+                }
+            }
+        }
     }
-    (output_device, file)
+    Ok((output_device, file))
 }
 
 pub fn apply_volume(sample: f32, volume: f32) -> f32 {
@@ -73,8 +108,8 @@ pub fn apply_volume(sample: f32, volume: f32) -> f32 {
 
 //FIXME maybe this should be more parameterizable and support resampling?
 /// Play a 16KHz mono audio buffer on a 48KHz stereo target, applying the chosen volume
-pub fn play_audio_buf(output_device_name: Option<String>, buf: &'static [f32], volume: f32) {
-    let output_device = get_output_device(output_device_name).0.unwrap();
+pub fn play_audio_buf(output_device_name: Option<String>, buf: &'static [f32], volume: f32) -> Result<(), AppError> {
+    let output_device = get_output_device(output_device_name)?.0.ok_or(AppError::NoDevice("output"))?;
     let output_config = cpal::StreamConfig { channels: 2, sample_rate: SampleRate(48000), buffer_size: BufferSize::Default };
     // FIXME move this into main and pass it in to get rid of static mut RECORD_BUF?
     let playback_secs = buf.len() as f32 / 16000.0;
@@ -92,9 +127,10 @@ pub fn play_audio_buf(output_device_name: Option<String>, buf: &'static [f32], v
         }
     };
 
-    let output_stream = output_device.build_output_stream(&output_config, output_data_fn, err_fn).unwrap();
-    output_stream.play().unwrap();
+    let output_stream = output_device.build_output_stream(&output_config, output_data_fn, err_fn).map_err(|e| AppError::BuildStreamError("output", e))?;
+    output_stream.play().map_err(|e| AppError::PlayStreamError("output", e))?;
     std::thread::sleep(core::time::Duration::from_secs_f32(playback_secs));
+    Ok(())
 }
 
 //FIXME receiver is super hacky and gross. It's intended to make the stop button work and also
@@ -108,9 +144,9 @@ pub fn play_audio_buf(output_device_name: Option<String>, buf: &'static [f32], v
 //Another idea: maybe allow passing in a fixed-size buffer for the consumer to receive samples in 
 //rather than returning a vec
 ///Record from a 48khz mono audio buffer into a 16khz mono format
-pub fn record_audio_vec(input_device_name: Option<String>, receiver: std::sync::mpsc::Receiver<(bool, f32)>) -> Vec<f32>
+pub fn record_audio_vec(input_device_name: Option<String>, receiver: std::sync::mpsc::Receiver<(bool, f32)>) -> Result<Vec<f32>, AppError>
 {
-    let input_device = get_input_device(input_device_name).0.unwrap();
+    let input_device = get_input_device(input_device_name)?.0.ok_or(AppError::NoDevice("input"))?;
     let input_config = cpal::StreamConfig { channels: 1, sample_rate: SampleRate(48000), buffer_size: BufferSize::Default};
     let record_vec: Vec<f32> = Vec::new();
 
@@ -119,7 +155,7 @@ pub fn record_audio_vec(input_device_name: Option<String>, receiver: std::sync::
     let arc1 = arc_vec.clone();
     let arc2 = arc_vec.clone();
 
-    let input_vol = receiver.recv().unwrap().1;
+    let input_vol = receiver.recv().map_err(|e| AppError::ChannelRecvError(e))?.1;
     let atomic_vol = AtomicU32::new(input_vol.to_bits());
     let arc_atomic_vol = Arc::new(atomic_vol);
 
@@ -128,23 +164,28 @@ pub fn record_audio_vec(input_device_name: Option<String>, receiver: std::sync::
 
 
     let input_data_fn = move |data: &[f32], _: &cpal::InputCallbackInfo| {
-        let lock = arc1.lock().unwrap();
-        let mut record_vec = lock;
-        let input_vol = f32::from_bits(atomic_vol1.load(Ordering::Relaxed));
-        for (j, &sample) in data.iter().enumerate() {
-            // Drop 2/3 of the samples to make 16KHz
-            if j % 3 == 0 {
-                record_vec.push(apply_volume(sample,  input_vol));
-           }
+        let maybe_lock = arc1.try_lock();
+        if maybe_lock.is_err() { println!("Failed to grab the lock in the input data fn") }
+        else {
+            let lock = maybe_lock.unwrap();
+            let mut record_vec = lock;
+            let input_vol = f32::from_bits(atomic_vol1.load(Ordering::Relaxed));
+            for (j, &sample) in data.iter().enumerate() {
+                // Drop 2/3 of the samples to make 16KHz
+                if j % 3 == 0 {
+                    record_vec.push(apply_volume(sample,  input_vol));
+                }
+            }
         }
+
     };
 
-    let input_stream = input_device.build_input_stream(&input_config, input_data_fn, err_fn).unwrap();
+    let input_stream = input_device.build_input_stream(&input_config, input_data_fn, err_fn).map_err(|e| AppError::BuildStreamError("input", e))?;
 
-    input_stream.play().unwrap();
+    input_stream.play().map_err(|e| AppError::PlayStreamError("input", e))?;
 
     loop {
-        let (recording, ivol) = receiver.recv().unwrap();
+        let (recording, ivol) = receiver.recv().map_err(|e| AppError::ChannelRecvError(e))?;
         if recording {
             atomic_vol2.store(ivol.to_bits(), std::sync::atomic::Ordering::Relaxed);
             std::thread::sleep(std::time::Duration::from_millis(50));
@@ -152,15 +193,15 @@ pub fn record_audio_vec(input_device_name: Option<String>, receiver: std::sync::
             break;
         }
     }
-    let lock = arc2.lock().unwrap();
+    let lock = arc2.try_lock().map_err(|_e| AppError::LockError)?;
     let record_vec = lock;
 
-    record_vec.to_owned()
+    Ok(record_vec.to_owned())
 }
 
 //TODO volume control?
-pub fn record_audio_fixed_size(input_device_name: Option<String>, buf: &'static mut [f32]) {
-    let input_device = get_input_device(input_device_name).0.unwrap();
+pub fn record_audio_fixed_size(input_device_name: Option<String>, buf: &'static mut [f32]) -> Result<(), AppError> {
+    let input_device = get_input_device(input_device_name)?.0.ok_or(AppError::NoDevice("input"))?;
     let input_config = cpal::StreamConfig { channels: 1, sample_rate: SampleRate(48000), buffer_size: BufferSize::Default};
     let buf_secs = buf.len() as f32 / 16000.0;
 
@@ -176,10 +217,11 @@ pub fn record_audio_fixed_size(input_device_name: Option<String>, buf: &'static 
         }
     };
 
-    let input_stream = input_device.build_input_stream(&input_config, input_data_fn, err_fn).unwrap();
+    let input_stream = input_device.build_input_stream(&input_config, input_data_fn, err_fn).map_err(|e| AppError::BuildStreamError("input", e))?;
 
-    input_stream.play().unwrap();
+    input_stream.play().map_err(|e| AppError::PlayStreamError("input", e))?;
     std::thread::sleep(core::time::Duration::from_secs_f32(buf_secs));
+    Ok(())
 }
 
 
