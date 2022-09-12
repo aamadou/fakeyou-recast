@@ -6,6 +6,7 @@ use cpal::traits::{DeviceTrait, StreamTrait};
 use ringbuf::RingBuffer;
 use native_dialog::{FileDialog, MessageDialog};
 use thiserror::Error;
+use rubato::{Resampler, SincFixedOut, SincFixedIn, InterpolationType, InterpolationParameters, WindowFunction};
 
 #[derive(Error, Debug)]
 pub enum AppError {
@@ -395,9 +396,6 @@ impl Application for App {
     }
 }
 
-const REALTIME_WAV_TENSOR_SIZE: usize = 16000;
-static mut REALTIME_BUF: [f32; REALTIME_WAV_TENSOR_SIZE] = [0.0; REALTIME_WAV_TENSOR_SIZE];
-
 //FIXME break this up and move parts of it into audio.rs
 /// Realtime record => record and playback at the same time
 async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32, f32)>, input_device_name: Option<String>, output_device_name: Option<String>, hubert: softvc::Hubert, acoustic: softvc::Acoustic, hifigan: softvc::Hifigan) -> Result<(), AppError>
@@ -405,48 +403,111 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
     let input_device = audio::get_input_device(input_device_name)?.0.ok_or(AppError::NoDevice("input"))?;
     let output_device = audio::get_output_device(output_device_name)?.0.ok_or(AppError::NoDevice("output"))?;
 
-    // Windows is bad and won't let me request 16KHz input so we'll have to do 48 and drop 2/3 when
-    // we pass to the 16khz model
-    let input_config = cpal::StreamConfig { channels: 1, sample_rate: SampleRate(48000), buffer_size: BufferSize::Fixed(8192) };
-    let output_config = cpal::StreamConfig { channels: 2, sample_rate: SampleRate(48000), buffer_size: BufferSize::Fixed(8192) };
-    let ring = RingBuffer::new(REALTIME_WAV_TENSOR_SIZE * 2);
+    let input_config = cpal::StreamConfig { channels: 1, sample_rate: SampleRate(48000), buffer_size: BufferSize::Fixed(98304) };
+    let output_config = cpal::StreamConfig { channels: 2, sample_rate: SampleRate(48000), buffer_size: BufferSize::Fixed(98304) };
+    let ring: RingBuffer<f32> = RingBuffer::new(100_000);
     let (mut producer, mut consumer) = ring.split();
     
 
-    let mut i = 0;
-    let input_data_fn = move |data: &[f32], _: &cpal::InputCallbackInfo| {
-
-        for (j, &sample) in data.iter().enumerate() {
-            // Drop 2/3 of the samples to make 16KHz
-            if j % 3 == 0 && i < REALTIME_WAV_TENSOR_SIZE {
-                unsafe { REALTIME_BUF[i] = audio::apply_volume(sample, INPUT_VOLUME) };
-                i+= 1;
-            }
-        }
-        if i >= REALTIME_WAV_TENSOR_SIZE {
-            let converted = softvc::inference(Box::new(unsafe {REALTIME_BUF}), hubert.clone(), acoustic.clone(), hifigan.clone());
-            //FIXME can't figure out how to propogate errors from here because cpal
-            if converted.is_err() {
-                return
-            }
-            else {
-                producer.push_slice(&converted.unwrap());
-            }
-            i = 0;
-        }
+    let params1 = InterpolationParameters {
+        sinc_len: 256,
+        f_cutoff: 0.95,
+        interpolation: InterpolationType::Linear,
+        oversampling_factor: 256,
+        window: WindowFunction::BlackmanHarris2,
     };
 
+    let params2 = InterpolationParameters {
+        sinc_len: 256,
+        f_cutoff: 0.95,
+        interpolation: InterpolationType::Linear,
+        oversampling_factor: 256,
+        window: WindowFunction::BlackmanHarris2,
+    };
+
+
+    let mut in_resampler = SincFixedOut::<f32>::new(
+        16000 as f64 / 48000 as f64,
+        2.0,
+        params1,
+        8192,
+        1,
+    ).unwrap();
+
+    let mut in_in_buf = in_resampler.input_buffer_allocate();
+    let mut in_out_buf = in_resampler.output_buffer_allocate();
+
+    let mut out_resampler = SincFixedOut::<f32>::new(
+        48000 as f64 / 16000 as f64,
+        2.0,
+        params2,
+        8192*3,
+        1,
+    ).unwrap();
+
+    let mut out_in_buf = out_resampler.input_buffer_allocate();
+    let mut out_out_buf = out_resampler.output_buffer_allocate();
+
+    in_in_buf.clear();
+    in_in_buf.push(vec![1.0; 24576]);
+    in_out_buf.clear();
+    in_out_buf.push(vec![2.0; 8192]);
+    out_in_buf.clear();
+    out_in_buf.push(vec![3.0; 8192]);
+    out_out_buf.clear();
+    out_out_buf.push(vec![4.0; 24576]);
+
+    let input_data_fn = move |data: &[f32], _: &cpal::InputCallbackInfo| {
+        in_in_buf.clear();
+        let n_frames = in_resampler.input_frames_next();
+        let mut resampler_input = data.to_vec();
+        resampler_input.resize(n_frames, 0.0);
+        in_in_buf.push(resampler_input);
+        let in_resampler_start = std::time::Instant::now();
+        in_resampler.process_into_buffer(&in_in_buf, &mut in_out_buf, None).unwrap();
+        let in_resampler_end = std::time::Instant::now();
+        println!("Resampling 48khz to 16kHz time {:?}", in_resampler_end - in_resampler_start);
+        producer.push_slice(&in_out_buf[0]);
+    };
+
+    let mut i = 0;
     let output_data_fn = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-        // Expand one sample to 6 to convert 16khz mono to 48khz stereo
-        let mut s: f32 = 0.0;
-        for (j, sample) in data.iter_mut().enumerate() {
-            if j%6==0 {
-                match consumer.pop() {
-                    Some(sa) => s = sa,
-                    None => s = 0.0,
-                }
+        let n_popped = consumer.pop_slice(&mut out_in_buf[0]);
+        println!("n_popped: {}", n_popped);
+        let mut softvc_input = out_in_buf[0][..8192].to_vec();
+        softvc_input.extend(&softvc_input.clone());
+        softvc_input.extend(&softvc_input.clone());
+        softvc_input.extend(&softvc_input.clone());
+        println!("{}", softvc_input.len());
+        let res = softvc::inference(softvc_input.into_boxed_slice(), hubert.clone(), acoustic.clone(), hifigan.clone());
+        match res {
+            Err(e) => {
+                //handle_errors(Err(e));
+                println!("{}", e);
             }
-            *sample = audio::apply_volume(s, unsafe { OUTPUT_VOLUME});
+            Ok(samples) => {
+                let mut resampler_input = samples.to_vec();
+                let n_frames = out_resampler.input_frames_next();
+                resampler_input.resize(n_frames, 0.0);
+                out_in_buf.clear();
+                out_in_buf.push(resampler_input);
+                let out_resampler_start = std::time::Instant::now();
+                out_resampler.process_into_buffer(&out_in_buf, &mut out_out_buf, None).unwrap();
+                let out_resampler_end = std::time::Instant::now();
+                println!("Resampling 16khz to 48kHz time {:?}", out_resampler_end - out_resampler_start);
+                for (j, sample) in data.iter_mut().enumerate() {
+                    let s = out_out_buf[0][i];
+                    *sample = audio::apply_volume(s, unsafe { OUTPUT_VOLUME});
+                    // expand one sample to 2 to convert 48khz mono to 48khz stereo
+                    if j%2 == 0 && i < out_out_buf[0].len() as usize
+                    {
+                        i += 1;
+                    }
+                    if i >= out_out_buf[0].len() {
+                        i = 0;
+                    }
+                } 
+            }
         }
     };
 
