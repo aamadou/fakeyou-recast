@@ -14,6 +14,7 @@ hound = "3.4.0"
 iced_native = "0.5.1"
 thiserror = "1.0"
 rubato = "0.12.0"
+itertools = "0.10.3"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 cpal = { version = "0.13.5", features=["wasm-bindgen"] }
@@ -22,7 +23,7 @@ web-sys = { version = "0.3.22", features=["console"] }
 console_error_panic_hook = "0.1.5"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-cpal = "0.13.5"
+cpal = "0.13.0"
 
 
 
