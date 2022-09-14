@@ -83,6 +83,7 @@ pub enum Message {
     ShowDebugPressed,
     Slider1Changed(f32),
     Slider2Changed(f32),
+    Slider3Changed(f32),
     RecordPressed,
     PlayTargetPressed,
     PlaySourcePressed,
@@ -172,6 +173,10 @@ impl Application for App {
                 if self.realtime_recording && self.realtime_record_sender.is_some() {
                     self.realtime_record_sender.as_ref().unwrap().send((self.realtime_recording.clone(), self.view_state.slider_1_value.clone(), self.view_state.slider_2_value.clone())).unwrap();
                 }
+            }
+            Message::Slider3Changed(new_value) => {
+                self.view_state.slider_3_value = new_value;
+                unsafe { ACTIVITY_THRESHOLD = new_value};
             }
             // Realtime record button => record and playback at the same time
             Message::RealtimeRecordPressed => {
@@ -401,13 +406,11 @@ const IN_BUFFER_SIZE: usize = CHUNK_SIZE;
 const OUT_BUFFER_SIZE: usize = 2*CHUNK_SIZE;
 const RINGBUFFER1_SIZE: usize = 2*CHUNK_SIZE;
 const RINGBUFFER2_SIZE: usize = RINGBUFFER1_SIZE*6;
-const ACTIVITY_THRESHOLD: f32 = 0.00004;
+
 static mut ACTIVITY_CHECK: bool = false;
-
-
-
 static mut SOFTVC_INPUT: [f32; TENSOR_SIZE] = [0.0f32; TENSOR_SIZE];
 static mut INPUT_CHUNK: [f32; CHUNK_SIZE] = [0.0f32; CHUNK_SIZE];
+static mut ACTIVITY_THRESHOLD: f32 = 0.00003;
 
 //FIXME break this up and move parts of it into audio.rs
 /// Realtime record => record and playback at the same time
@@ -441,8 +444,8 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
            if i >= CHUNK_SIZE { i = 0; input_sample_total = 0.0;}
         }
         let input_sample_avg = input_sample_total / CHUNK_SIZE as f32;
-        println!("input sample average {}", input_sample_avg as f32);
-        if input_sample_avg.abs() >= ACTIVITY_THRESHOLD {
+        //println!("input sample average {}", input_sample_avg as f32);
+        if input_sample_avg.abs() >= unsafe { ACTIVITY_THRESHOLD } {
            unsafe {  ACTIVITY_CHECK = true; }
         } else {
            unsafe { ACTIVITY_CHECK = false; }

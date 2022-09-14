@@ -14,6 +14,7 @@ pub struct ViewState {
     pub output_browse_state: button::State,
     pub slider_1_state: slider::State,
     pub slider_2_state: slider::State,
+    pub slider_3_state: slider::State,
     pub input_device_list_state: pick_list::State<String>,
     pub output_device_list_state: pick_list::State<String>,
     pub model_browse_selected: Option<PathBuf>,
@@ -25,6 +26,7 @@ pub struct ViewState {
     pub output_browse_selected: Option<PathBuf>,
     pub slider_1_value: f32,
     pub slider_2_value: f32,
+    pub slider_3_value: f32,
     pub show_debug: bool,
 }
 
@@ -41,6 +43,7 @@ impl ViewState{
         let output_browse_state = button::State::new();
         let slider_1_state = slider::State::new();
         let slider_2_state = slider::State::new();
+        let slider_3_state = slider::State::new();
         let input_device_list_state = pick_list::State::new();
         let output_device_list_state = pick_list::State::new();
         let model_browse_selected =  None;
@@ -52,6 +55,7 @@ impl ViewState{
         let output_browse_selected = None;
         let slider_1_value = 80.0;
         let slider_2_value = 80.0;
+        let slider_3_value = 0.00003;
         let show_debug = false;
 
         Self {
@@ -66,6 +70,7 @@ impl ViewState{
             output_browse_state,
             slider_1_state,
             slider_2_state,
+            slider_3_state,
             input_device_list_state,
             output_device_list_state,
             model_browse_selected,
@@ -77,6 +82,7 @@ impl ViewState{
             output_browse_selected,
             slider_1_value,
             slider_2_value,
+            slider_3_value,
             show_debug,
         }
     }
@@ -165,6 +171,10 @@ pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a V
             .push(Text::new("Output Volume: "))
             .push(
                 Slider::new(&mut view_state.slider_2_state, 0.0..=100.0, view_state.slider_2_value, Message::Slider2Changed)
+            )
+            .push(Text::new("Speaker Threshold: "))
+            .push(
+                Slider::new(&mut view_state.slider_3_state, 0.000005..=0.000100, view_state.slider_3_value, Message::Slider3Changed).step(0.000001)
             )
         )
         .push(
