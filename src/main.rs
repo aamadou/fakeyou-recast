@@ -402,6 +402,13 @@ const OUT_BUFFER_SIZE: usize = 2*CHUNK_SIZE;
 const RINGBUFFER1_SIZE: usize = 2*CHUNK_SIZE;
 const RINGBUFFER2_SIZE: usize = RINGBUFFER1_SIZE*6;
 
+
+
+static mut SOFTVC_INPUT: [f32; TENSOR_SIZE] = [0.0f32; TENSOR_SIZE];
+static mut INPUT_CHUNK: [f32; CHUNK_SIZE] = [0.0f32; CHUNK_SIZE];
+static mut OUT_SAMPLES: [f32;CHUNK_SIZE*6] = [0.0f32; CHUNK_SIZE*6];
+
+
 //FIXME break this up and move parts of it into audio.rs
 /// Realtime record => record and playback at the same time
 async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32, f32)>, input_device_name: Option<String>, output_device_name: Option<String>, hubert: softvc::Hubert, acoustic: softvc::Acoustic, hifigan: softvc::Hifigan) -> Result<(), AppError>
@@ -435,21 +442,18 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
         input_count +=1;
     };
 
-
     let output_data_fn = move |data: &mut cpal::Data, _: &cpal::OutputCallbackInfo| {
         println!("consumer1_len {}", consumer1.len());
-        let mut out_samples = Vec::new();
         if consumer1.len() >= CHUNK_SIZE {
-            let blah: Vec<f32> = consumer1.iter().copied().take(CHUNK_SIZE).collect();
-            consumer1.discard(CHUNK_SIZE);
-            let mut softvc_input = Vec::new();
-            while softvc_input.len() < TENSOR_SIZE {
-                softvc_input.extend(blah.clone());
+            unsafe { consumer1.pop_slice({&mut INPUT_CHUNK}); }
+            //consumer1.discard(CHUNK_SIZE);
+            for i in 0..(TENSOR_SIZE/CHUNK_SIZE) {
+                unsafe { SOFTVC_INPUT[i*CHUNK_SIZE..((i+1)*CHUNK_SIZE)].copy_from_slice(&INPUT_CHUNK); }
             }
-            println!("softvc_input len {}", softvc_input.len());
-            softvc_input.resize(TENSOR_SIZE, 0.0);
+            //println!("softvc_input len {}", softvc_input.len());
+            //softvc_input.resize(TENSOR_SIZE, 0.0);
             println!("out_data_len {}", data.len());
-            let res = softvc::inference(softvc_input.into_boxed_slice(), hubert.clone(), acoustic.clone(), hifigan.clone());
+            let res = softvc::inference((unsafe { &SOFTVC_INPUT }), hubert.clone(), acoustic.clone(), hifigan.clone());
             match res {
                 Err(e) => {
                     //handle_errors(Err(e));
@@ -457,8 +461,7 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
                 },
                 Ok(samples) => {
                     // dupe 6x to take mono 16khz to stereo 48khz
-                    out_samples = samples.iter().flat_map(|f| std::iter::repeat(*f).take(6)).collect();
-                    producer2.push_slice(&out_samples);
+                    samples.iter().flat_map(|f| std::iter::repeat(*f).take(6)).for_each(|sample| producer2.push(sample).unwrap_or(()));
                 }
             }
         }
@@ -514,7 +517,7 @@ async fn play_target(hubert: softvc::Hubert, acoustic: softvc::Acoustic, hifigan
     //TODO some kind of loading spinner or something while this is happening
     let mut wav_data = unsafe {RECORD_BUF}.to_vec();
     wav_data.resize(WAV_TENSOR_SIZE, 1.0);
-    let out_samples = softvc::inference(wav_data.into_boxed_slice(), hubert, acoustic, hifigan)?;
+    let out_samples = softvc::inference(&wav_data, hubert, acoustic, hifigan)?;
 
     let spec = hound::WavSpec {
         channels: 1,

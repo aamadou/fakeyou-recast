@@ -25,7 +25,7 @@ impl Model for Hubert {
 }
 
 impl Hubert {
-    pub fn forward(&self, samples: Box<[f32]>) -> Result<tch::Tensor, AppError> {
+    pub fn forward(&self, samples: &[f32]) -> Result<tch::Tensor, AppError> {
         let tensor = Tensor::of_slice(&samples).unsqueeze(0).unsqueeze(0).to(tch::Device::Cuda(0));
         let model = self.0.try_lock().map_err(|_e| AppError::LockError)?;
         model.as_ref().ok_or(AppError::NoModel)?.method_ts("units", &[tensor]).map_err(|_e| AppError::ModelError)
@@ -79,7 +79,7 @@ impl Hifigan {
     }
 }
 
-pub fn inference(in_samples: Box<[f32]>, hubert: Hubert, acoustic: Acoustic, hifigan: Hifigan) -> Result<Vec<f32>, AppError> {
+pub fn inference(in_samples: &[f32], hubert: Hubert, acoustic: Acoustic, hifigan: Hifigan) -> Result<Vec<f32>, AppError> {
     tch::jit::set_graph_executor_optimize(false);
     let hubert_start_time = std::time::Instant::now();
     let hubert_out = hubert.forward(in_samples)?;
