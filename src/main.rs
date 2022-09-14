@@ -401,13 +401,13 @@ const IN_BUFFER_SIZE: usize = CHUNK_SIZE;
 const OUT_BUFFER_SIZE: usize = 2*CHUNK_SIZE;
 const RINGBUFFER1_SIZE: usize = 2*CHUNK_SIZE;
 const RINGBUFFER2_SIZE: usize = RINGBUFFER1_SIZE*6;
+const ACTIVITY_THRESHOLD: f32 = 0.0018;
 
 
 
 static mut SOFTVC_INPUT: [f32; TENSOR_SIZE] = [0.0f32; TENSOR_SIZE];
 static mut INPUT_CHUNK: [f32; CHUNK_SIZE] = [0.0f32; CHUNK_SIZE];
-static mut OUT_SAMPLES: [f32;CHUNK_SIZE*6] = [0.0f32; CHUNK_SIZE*6];
-
+static mut ACTIVITY_CHECK: [bool; CHUNK_SIZE] = [false; CHUNK_SIZE];
 
 //FIXME break this up and move parts of it into audio.rs
 /// Realtime record => record and playback at the same time
@@ -433,9 +433,15 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
         for (j, &sample) in data_slice.iter().enumerate() {
             // Drop 2/3 of the samples to make 16KHz
             if j % 3 == 0 {
+                if sample >= ACTIVITY_THRESHOLD {
+                    unsafe { ACTIVITY_CHECK[i] = true; }
+                } else {
+                    unsafe { ACTIVITY_CHECK[i] = false; }
+                }
                 producer1.push(sample);
                 i += 1;
            }
+           if i >= CHUNK_SIZE { i = 0;}
         }
 
 
@@ -461,7 +467,7 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
                 },
                 Ok(samples) => {
                     // dupe 6x to take mono 16khz to stereo 48khz
-                    samples.iter().flat_map(|f| std::iter::repeat(*f).take(6)).for_each(|sample| producer2.push(sample).unwrap_or(()));
+                    samples.iter().enumerate().take(CHUNK_SIZE).map(|(k, sample)| if unsafe {  ACTIVITY_CHECK[k] } == true { &sample } else { &0.0 }).map(|f| std::iter::repeat(*f).take(6)).flatten().for_each(|active_sample| producer2.push(active_sample).unwrap_or(()));
                 }
             }
         }
