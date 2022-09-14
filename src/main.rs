@@ -397,9 +397,10 @@ impl Application for App {
 
 const TENSOR_SIZE: usize = 65536;
 const CHUNK_SIZE: usize = 8192;
-const IN_BUFFER_SIZE: u32 = 4096;
-const OUT_BUFFER_SIZE: u32 = 24576;
-const OUT_ACTUAL_SIZE: usize= 12228;
+const IN_BUFFER_SIZE: usize = CHUNK_SIZE;
+const OUT_BUFFER_SIZE: usize = 2*CHUNK_SIZE;
+const RINGBUFFER1_SIZE: usize = 2*CHUNK_SIZE;
+const RINGBUFFER2_SIZE: usize = RINGBUFFER1_SIZE*6;
 
 //FIXME break this up and move parts of it into audio.rs
 /// Realtime record => record and playback at the same time
@@ -408,45 +409,44 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
     let input_device = audio::get_input_device(input_device_name)?.0.ok_or(AppError::NoDevice("input"))?;
     let output_device = audio::get_output_device(output_device_name)?.0.ok_or(AppError::NoDevice("output"))?;
 
-    let input_config = cpal::StreamConfig { channels: 1, sample_rate: SampleRate(48000), buffer_size: BufferSize::Fixed(IN_BUFFER_SIZE) };
-    let output_config = cpal::StreamConfig { channels: 2, sample_rate: SampleRate(48000), buffer_size: BufferSize::Fixed(OUT_BUFFER_SIZE) };
-    let ring: RingBuffer<f32> = RingBuffer::new(100_000);
-    let (mut producer, mut consumer1) = ring.split();
-    let ring2: RingBuffer<f32> = RingBuffer::new(100_000); 
-    let (mut producer2, consumer2) = ring2.split();
-    let arc_consumer2 = Arc::new(Mutex::new(consumer2));
-    let consumer2_1 = arc_consumer2.clone();
-    let consumer2_2 = arc_consumer2.clone();
+    let input_config = cpal::StreamConfig { channels: 1, sample_rate: SampleRate(48000), buffer_size: BufferSize::Fixed(IN_BUFFER_SIZE as u32) };
+    let output_config = cpal::StreamConfig { channels: 2, sample_rate: SampleRate(48000), buffer_size: BufferSize::Fixed(OUT_BUFFER_SIZE as u32) };
+    let ring1: RingBuffer<f32> = RingBuffer::new(RINGBUFFER1_SIZE);
+    let (mut producer1, mut consumer1) = ring1.split();
+    let ring2: RingBuffer<f32> = RingBuffer::new(RINGBUFFER2_SIZE);
+    let (mut producer2, mut consumer2) = ring2.split();
+
 
 
     let mut input_count = 0;
     let mut i = 0;
     let input_data_fn = move |data: &cpal::Data, _: &cpal::InputCallbackInfo| {
         let data_slice = data.as_slice().unwrap();
-        println!("input_data_len {}", data_slice.len());
+        //println!("input_data_len {}", data_slice.len());
         for (j, &sample) in data_slice.iter().enumerate() {
             // Drop 2/3 of the samples to make 16KHz
             if j % 3 == 0 {
-                producer.push(sample);
+                producer1.push(sample);
                 i += 1;
            }
         }
 
 
         input_count +=1;
-        println!("input count {}", input_count);
     };
 
 
     let output_data_fn = move |data: &mut cpal::Data, _: &cpal::OutputCallbackInfo| {
-        //println!("consumer_len {}", consumer1.len());
+        println!("consumer1_len {}", consumer1.len());
         let mut out_samples = Vec::new();
         if consumer1.len() >= CHUNK_SIZE {
+            let blah: Vec<f32> = consumer1.iter().copied().take(CHUNK_SIZE).collect();
+            consumer1.discard(CHUNK_SIZE);
             let mut softvc_input = Vec::new();
-            softvc_input.extend(consumer1.iter().take(CHUNK_SIZE));
-            softvc_input.extend(softvc_input.clone().iter());
-            softvc_input.extend(softvc_input.clone().iter());
-            softvc_input.extend(softvc_input.clone().iter());
+            while softvc_input.len() < TENSOR_SIZE {
+                softvc_input.extend(blah.clone());
+            }
+            println!("softvc_input len {}", softvc_input.len());
             softvc_input.resize(TENSOR_SIZE, 0.0);
             println!("out_data_len {}", data.len());
             let res = softvc::inference(softvc_input.into_boxed_slice(), hubert.clone(), acoustic.clone(), hifigan.clone());
@@ -456,44 +456,27 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
                     println!("{}", e);
                 },
                 Ok(samples) => {
-                    out_samples = samples;
+                    // dupe 6x to take mono 16khz to stereo 48khz
+                    out_samples = samples.iter().flat_map(|f| std::iter::repeat(*f).take(6)).collect();
+                    producer2.push_slice(&out_samples);
                 }
             }
-            consumer1.discard(CHUNK_SIZE);
         }
 
 
-        if out_samples.len() > 0
+        if consumer2.len() > CHUNK_SIZE * 6
         {
-            let out_samples = out_samples.iter().flat_map(|f| std::iter::repeat(*f).take(6)).collect::<Vec<f32>>(); 
-            producer2.push_slice(&out_samples);
+            let data_slice: &mut [f32] = data.as_slice_mut().unwrap();
+            consumer2.pop_slice(data_slice);
         }
-
-
-        let mut data_slice: &mut [f32] = data.as_slice_mut().unwrap(); 
-        let lock = consumer2_1.try_lock().unwrap();
-        let mut consumer2_1 = lock;
-        consumer2_1.pop_slice(&mut data_slice[..OUT_ACTUAL_SIZE]);
     };
 
     let input_stream = input_device.build_input_stream_raw(&input_config, SampleFormat::F32, input_data_fn, audio::err_fn).map_err(|e| AppError::BuildStreamError("input", e))?;
     let output_stream = output_device.build_output_stream_raw(&output_config, SampleFormat::F32, output_data_fn, audio::err_fn).map_err(|e| AppError::BuildStreamError("output", e))?;
 
     input_stream.play().map_err(|e| AppError::PlayStreamError("input", e))?;
+    output_stream.play().map_err(|e| AppError::PlayStreamError("output", e))?;
     loop {
-        let mut go: bool;
-        {
-            let lock = consumer2_2.try_lock().unwrap();
-            let consumer2 = lock;
-            go = consumer2.len() >= OUT_ACTUAL_SIZE as usize;
-        }
-        if go {
-            output_stream.play().map_err(|e| AppError::PlayStreamError("output", e))?;
-        }
-        else {
-            output_stream.pause().unwrap();
-        }
-
 
         let (realtime_recording, ivol, ovol) = realtime_receiver.recv().map_err(|e| AppError::ChannelRecvError(e))?;
         if realtime_recording {
