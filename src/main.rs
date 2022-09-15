@@ -84,6 +84,7 @@ pub enum Message {
     Slider1Changed(f32),
     Slider2Changed(f32),
     Slider3Changed(f32),
+    Slider4Changed(f32),
     RecordPressed,
     PlayTargetPressed,
     PlaySourcePressed,
@@ -177,6 +178,11 @@ impl Application for App {
             Message::Slider3Changed(new_value) => {
                 self.view_state.slider_3_value = new_value;
                 unsafe { ACTIVITY_THRESHOLD = new_value};
+            }
+            Message::Slider4Changed(new_value) => {
+                //TODO
+                //self.view_state.slider_4_value = new_value;
+                //unsafe { ACTIVITY_THRESHOLD = new_value};
             }
             // Realtime record button => record and playback at the same time
             Message::RealtimeRecordPressed => {
@@ -433,7 +439,7 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
     let input_data_fn = move |data: &cpal::Data, _: &cpal::InputCallbackInfo| {
         let data_slice: &[f32] = data.as_slice().unwrap();
         for sample in data_slice.iter() {
-            producer1.push(*sample);
+            producer1.push(audio::apply_volume(*sample, unsafe { INPUT_VOLUME}));
             q += 1
         }
         if q == CHUNK_SIZE { 
@@ -488,7 +494,9 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
         if consumer2.len() >= RINGBUFFER2_SIZE  / 2
         {
             // send output
-            consumer2.pop_slice(data_slice);
+            for sample in data_slice.iter_mut() {
+                *sample = audio::apply_volume(consumer2.pop().unwrap_or(0.0), unsafe { OUTPUT_VOLUME });
+            }
         } else {
             // send silence
             println!("no data");
