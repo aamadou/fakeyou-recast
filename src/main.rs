@@ -401,7 +401,7 @@ impl Application for App {
 }
 
 const TENSOR_SIZE: usize = 16000; // 1 second at 16KHz
-const CHUNK_SIZE: usize = 4800; // 100ms at 48KHz
+const CHUNK_SIZE: usize = 9600; // 100ms at 48KHz
 const CHUNK_SIZE_16K: usize = CHUNK_SIZE/3;
 const IN_BUFFER_SIZE: usize = CHUNK_SIZE;
 const OUT_BUFFER_SIZE: usize = CHUNK_SIZE;
@@ -426,13 +426,26 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
     let ring2: RingBuffer<f32> = RingBuffer::new(RINGBUFFER2_SIZE);
     let (mut producer2, mut consumer2) = ring2.split();
 
+    let mut input_fill_start_time: std::time::Instant = std::time::Instant::now();
+    let mut input_fill_end_time: std::time::Instant = std::time::Instant::now();
+    let mut q = 0;
 
     let input_data_fn = move |data: &cpal::Data, _: &cpal::InputCallbackInfo| {
         let data_slice: &[f32] = data.as_slice().unwrap();
         for sample in data_slice.iter() {
             producer1.push(*sample);
+            q += 1
+        }
+        if q == CHUNK_SIZE { 
+            input_fill_end_time = std::time::Instant::now();
+            println!("input time {:?}", input_fill_end_time - input_fill_start_time);
+            q = 0;
+            input_fill_start_time = std::time::Instant::now();
         }
     };
+
+    let mut p = 0;
+    let mut output_start_time = std::time::Instant::now();
     let output_data_fn = move |data: &mut cpal::Data, _: &cpal::OutputCallbackInfo| {
         println!("consumer1_len {}", consumer1.len());
         if consumer1.len() >= CHUNK_SIZE {
@@ -464,7 +477,7 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
                         .map(|f| std::iter::repeat(*f).take(6)) // upsample to 48khz stereo
                         .flatten()
                         .take(CHUNK_SIZE*2) // trim back down to 100ms (2 channels)
-                        .for_each(|sample| { producer2.push(sample).unwrap_or(())});
+                        .for_each(|sample| { producer2.push(sample).unwrap_or(()); p += 1;});
                 }
             }
         }
@@ -480,6 +493,12 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
             // send silence
             println!("no data");
             data_slice.fill(0.0);
+        }
+        if p == RINGBUFFER2_SIZE / 2 {
+            let output_end_time = std::time::Instant::now();
+            println!("output time: {:?}", output_end_time - output_start_time);
+            p = 0;
+            output_start_time = std::time::Instant::now();
         }
     };
 
