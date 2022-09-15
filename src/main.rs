@@ -400,14 +400,14 @@ impl Application for App {
     }
 }
 
-const TENSOR_SIZE: usize = 65536;
-const CHUNK_SIZE: usize = 8192;
+const TENSOR_SIZE: usize = 16000; // 1 second at 16KHz
+const CHUNK_SIZE: usize = 4800; // 100ms at 48KHz
+const CHUNK_SIZE_16K: usize = CHUNK_SIZE/3;
 const IN_BUFFER_SIZE: usize = CHUNK_SIZE;
-const OUT_BUFFER_SIZE: usize = 2*CHUNK_SIZE;
+const OUT_BUFFER_SIZE: usize = CHUNK_SIZE;
 const RINGBUFFER1_SIZE: usize = 2*CHUNK_SIZE;
-const RINGBUFFER2_SIZE: usize = RINGBUFFER1_SIZE*6;
+const RINGBUFFER2_SIZE: usize = 2*CHUNK_SIZE*2; // 2 channels
 
-static mut ACTIVITY_CHECK: bool = false;
 static mut SOFTVC_INPUT: [f32; TENSOR_SIZE] = [0.0f32; TENSOR_SIZE];
 static mut INPUT_CHUNK: [f32; CHUNK_SIZE] = [0.0f32; CHUNK_SIZE];
 static mut ACTIVITY_THRESHOLD: f32 = 0.00003;
@@ -427,41 +427,31 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
     let (mut producer2, mut consumer2) = ring2.split();
 
 
-    let mut input_count = 0;
-    let mut i = 0;
-
     let input_data_fn = move |data: &cpal::Data, _: &cpal::InputCallbackInfo| {
-        let mut input_sample_total: f32 = 0.0;
         let data_slice: &[f32] = data.as_slice().unwrap();
-        //println!("input_data_len {}", data_slice.len());
-        for (j, &sample) in data_slice.iter().enumerate() {
-            // Drop 2/3 of the samples to make 16KHz
-            if j % 3 == 0 {
-                producer1.push(sample);
-                input_sample_total += sample;
-                i += 1;
-           }
-           if i >= CHUNK_SIZE { i = 0; input_sample_total = 0.0;}
+        for sample in data_slice.iter() {
+            producer1.push(*sample);
         }
-        let input_sample_avg = input_sample_total / CHUNK_SIZE as f32;
-        //println!("input sample average {}", input_sample_avg as f32);
-        if input_sample_avg.abs() >= unsafe { ACTIVITY_THRESHOLD } {
-           unsafe {  ACTIVITY_CHECK = true; }
-        } else {
-           unsafe { ACTIVITY_CHECK = false; }
-        }
-
-        input_count +=1;
     };
     let output_data_fn = move |data: &mut cpal::Data, _: &cpal::OutputCallbackInfo| {
         println!("consumer1_len {}", consumer1.len());
         if consumer1.len() >= CHUNK_SIZE {
             unsafe { consumer1.pop_slice({&mut INPUT_CHUNK}); }
-            for i in 0..(TENSOR_SIZE/CHUNK_SIZE) {
-                unsafe { SOFTVC_INPUT[i*CHUNK_SIZE..((i+1)*CHUNK_SIZE)].copy_from_slice(&INPUT_CHUNK); }
+            let mut i = 0;
+            // downsample to 16k
+            for (j, &sample) in unsafe { INPUT_CHUNK }.iter().enumerate() {
+                if j % 3 == 0 {
+                   unsafe { SOFTVC_INPUT[i] = sample }; 
+                   i+= 1;
+                }
+                if i >= unsafe { SOFTVC_INPUT }.len() {
+                    i = 0;
+                }
             }
-            //println!("softvc_input len {}", softvc_input.len());
-            //softvc_input.resize(TENSOR_SIZE, 0.0);
+            // Dupe 100ms to 1 second
+            for k in 1..(TENSOR_SIZE/CHUNK_SIZE_16K) {
+                unsafe { SOFTVC_INPUT.copy_within(0..CHUNK_SIZE_16K, CHUNK_SIZE_16K*k)};
+            }
             println!("out_data_len {}", data.len());
             let res = softvc::inference((unsafe { &SOFTVC_INPUT }), hubert.clone(), acoustic.clone(), hifigan.clone());
             match res {
@@ -471,22 +461,25 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
                 },
                 Ok(samples) => {
                     samples.iter()
-                        //.enumerate()
-                        .take(CHUNK_SIZE)
-                        .map(|f| if unsafe { ACTIVITY_CHECK } { *f } else { 0.0 })
-                        // dupe 6x to take mono 16khz to stereo 48khz
-                        .map(|f| std::iter::repeat(f).take(6))
+                        .map(|f| std::iter::repeat(*f).take(6)) // upsample to 48khz stereo
                         .flatten()
+                        .take(CHUNK_SIZE*2) // trim back down to 100ms (2 channels)
                         .for_each(|sample| { producer2.push(sample).unwrap_or(())});
                 }
             }
         }
 
 
-        if consumer2.len() > CHUNK_SIZE * 6
+        println!("consumer2 len {}", consumer2.len());
+        let data_slice: &mut [f32] = data.as_slice_mut().unwrap();
+        if consumer2.len() >= RINGBUFFER2_SIZE  / 2
         {
-            let data_slice: &mut [f32] = data.as_slice_mut().unwrap();
+            // send output
             consumer2.pop_slice(data_slice);
+        } else {
+            // send silence
+            println!("no data");
+            data_slice.fill(0.0);
         }
     };
 
