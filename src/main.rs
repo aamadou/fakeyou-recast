@@ -38,6 +38,7 @@ pub enum AppError {
 mod view;
 mod audio;
 mod softvc;
+mod vad;
 
 use softvc::Model;
 
@@ -54,7 +55,8 @@ pub fn main() -> iced::Result {
     App::run(settings)
 }
 
-const WAV_TENSOR_SIZE: usize = 319507;
+const WAV_TENSOR_SIZE: usize = 1440000;
+const MODEL_SAMPLE_RATE: usize = 16000;
 
 //FIXME unsafe
 static mut RECORD_BUF: [f32; WAV_TENSOR_SIZE] = [0.0; WAV_TENSOR_SIZE];
@@ -66,6 +68,7 @@ struct App {
     hubert: softvc::Hubert,
     acoustic: softvc::Acoustic,
     hifigan: softvc::Hifigan,
+    vad: vad::Vad,
     view_state: view::ViewState,
     input_device_list_options: Vec<String>,
     output_device_list_options: Vec<String>,
@@ -112,6 +115,7 @@ impl Application for App {
         let hubert = softvc::Hubert::new();
         let acoustic = softvc::Acoustic::new();
         let hifigan = softvc::Hifigan::new();
+        let vad = vad::Vad::new();
         let view_state = view::ViewState::new();
         let recording = false;
         let record_sender = None;
@@ -129,6 +133,7 @@ impl Application for App {
                 hubert,
                 acoustic,
                 hifigan,
+                vad,
                 view_state,
                 input_device_list_options,
                 output_device_list_options,
@@ -199,7 +204,8 @@ impl Application for App {
                     let hubert = self.hubert.clone();
                     let acoustic = self.acoustic.clone();
                     let hifigan = self.hifigan.clone();
-                    command = Command::perform(start_realtime(realtime_record_receiver, input_device_name, output_device_name, hubert, acoustic, hifigan), handle_errors);
+                    let vad = self.vad.clone();
+                    command = Command::perform(start_realtime(realtime_record_receiver, input_device_name, output_device_name, hubert, acoustic, hifigan, vad), handle_errors);
                     let _res = self.realtime_record_sender.as_ref().unwrap().send((true, self.view_state.slider_1_value.clone(), self.view_state.slider_2_value.clone()));
                 }
                 self.realtime_recording = !self.realtime_recording;
@@ -221,6 +227,7 @@ impl Application for App {
                         Ok(Some(p)) => {
                             let acoustic = self.acoustic.clone();
                             let path = p.clone();
+                            // TODO use async instead of threads and handle errors
                             std::thread::spawn(move ||{
                                 acoustic.load(path)}
                             );
@@ -237,6 +244,10 @@ impl Application for App {
                                 hubert.load(PathBuf::from("./models/model2.recast_base"))}
                             );
                             self.view_state.hubert_browse_selected = Some(PathBuf::from("./models/model2.recast_base"));
+                            let vad = self.vad.clone();
+                            std::thread::spawn(move || {
+                                vad.load(PathBuf::from("./models/silero_vad.jit"))
+                            });
                         },
                         Ok(None) => {},
                         Err(_e) => { handle_errors(Err(AppError::FileDialogError(location))); }
@@ -406,8 +417,9 @@ impl Application for App {
     }
 }
 
-const TENSOR_SIZE: usize = 16000; // 1 second at 16KHz
-const CHUNK_SIZE: usize = 9600; // 100ms at 48KHz
+const CHUNK_SIZE: usize = 19200; // 400ms at 48KHz
+const TENSOR_SIZE: usize = 32000; // 2 seconds at 16KHz
+const VAD_SIZE: usize = 1600; // 100ms at 16KHz
 const CHUNK_SIZE_16K: usize = CHUNK_SIZE/3;
 const IN_BUFFER_SIZE: usize = CHUNK_SIZE;
 const OUT_BUFFER_SIZE: usize = CHUNK_SIZE;
@@ -416,11 +428,13 @@ const RINGBUFFER2_SIZE: usize = 2*CHUNK_SIZE*2; // 2 channels
 
 static mut SOFTVC_INPUT: [f32; TENSOR_SIZE] = [0.0f32; TENSOR_SIZE];
 static mut INPUT_CHUNK: [f32; CHUNK_SIZE] = [0.0f32; CHUNK_SIZE];
+static mut VAD_CHUNK: [f32; VAD_SIZE] = [0.0f32; VAD_SIZE];
+static mut VAD_CONFIDENCE: [f32; CHUNK_SIZE_16K/VAD_SIZE] = [0.0; CHUNK_SIZE_16K/VAD_SIZE];
 static mut ACTIVITY_THRESHOLD: f32 = 0.00003;
 
 //FIXME break this up and move parts of it into audio.rs
 /// Realtime record => record and playback at the same time
-async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32, f32)>, input_device_name: Option<String>, output_device_name: Option<String>, hubert: softvc::Hubert, acoustic: softvc::Acoustic, hifigan: softvc::Hifigan) -> Result<(), AppError>
+async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32, f32)>, input_device_name: Option<String>, output_device_name: Option<String>, hubert: softvc::Hubert, acoustic: softvc::Acoustic, hifigan: softvc::Hifigan, vad: vad::Vad) -> Result<(), AppError>
 {
     let input_device = audio::get_input_device(input_device_name)?.0.ok_or(AppError::NoDevice("input"))?;
     let output_device = audio::get_output_device(output_device_name)?.0.ok_or(AppError::NoDevice("output"))?;
@@ -467,7 +481,31 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
                     i = 0;
                 }
             }
-            // Dupe 100ms to 1 second
+
+            // Find active 100ms chunks with Silero VAD
+            let mut v = 0;
+            unsafe { &SOFTVC_INPUT[..CHUNK_SIZE_16K] }.chunks(VAD_SIZE).for_each(|chunk| {
+                unsafe { VAD_CHUNK.copy_from_slice(chunk)};
+                let vad_start_time = std::time::Instant::now();
+                let vad_res = vad.forward(unsafe { &VAD_CHUNK});
+                let mut vad_tensor = tch::Tensor::of_slice(&[0.0]);
+                match vad_res {
+                    Err(e) => {
+                        println!("{}", e);
+
+                    },
+                    Ok(t) => {
+                        vad_tensor = t;
+                    }
+                }
+                let vad_end_time = std::time::Instant::now();
+                println!("vad time {:?}", vad_end_time - vad_start_time);
+                unsafe { VAD_CONFIDENCE[v] = vad_tensor.double_value(&[0]) as f32; }
+                v += 1;
+            });
+            println!("voice activity confidence {:?}", unsafe { VAD_CONFIDENCE });
+            
+            // Dupe SOFTVC_INPUT until it is TENSOR_SIZE long
             for k in 1..(TENSOR_SIZE/CHUNK_SIZE_16K) {
                 unsafe { SOFTVC_INPUT.copy_within(0..CHUNK_SIZE_16K, CHUNK_SIZE_16K*k)};
             }
@@ -480,9 +518,20 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
                 },
                 Ok(samples) => {
                     samples.iter()
-                        .map(|f| std::iter::repeat(*f).take(6)) // upsample to 48khz stereo
+                        .enumerate()
+                        .map(|(e, sample)| {
+                            let mut sa = 0.0;
+                            for i in 0..CHUNK_SIZE_16K/VAD_SIZE {
+                                if e < (i+1)*VAD_SIZE && e > i*VAD_SIZE &&  unsafe { VAD_CONFIDENCE[i] } > 0.5  {
+                                    sa = *sample;
+                                    break;
+                                }
+                            }
+                            sa
+                        })
+                        .map(|f| std::iter::repeat(f).take(6)) // upsample to 48khz stereo
                         .flatten()
-                        .take(CHUNK_SIZE*2) // trim back down to 100ms (2 channels)
+                        .take(CHUNK_SIZE*2) // trim back down to CHUNK_SIZE (2 channels)
                         .for_each(|sample| { producer2.push(sample).unwrap_or(()); p += 1;});
                 }
             }
@@ -551,13 +600,11 @@ async fn play_source(output_device_name: Option<String>) -> Result<(), AppError>
 /// If we are too slow, it could be a nice time saver for that case though.
 async fn play_target(hubert: softvc::Hubert, acoustic: softvc::Acoustic, hifigan: softvc::Hifigan, output_device_name: Option<String>) -> Result<(), AppError> {
     //TODO some kind of loading spinner or something while this is happening
-    let mut wav_data = unsafe {RECORD_BUF}.to_vec();
-    wav_data.resize(WAV_TENSOR_SIZE, 1.0);
-    let out_samples = softvc::inference(&wav_data, hubert, acoustic, hifigan)?;
+    let out_samples = softvc::inference(unsafe {&RECORD_BUF[..RECORD_SAMPLE_COUNT]}, hubert, acoustic, hifigan)?;
 
     let spec = hound::WavSpec {
         channels: 1,
-        sample_rate: 16000,
+        sample_rate: MODEL_SAMPLE_RATE as u32,
         bits_per_sample: 32,
         sample_format: hound::SampleFormat::Float,
     };
@@ -572,7 +619,7 @@ async fn play_target(hubert: softvc::Hubert, acoustic: softvc::Acoustic, hifigan
             let s = out_samples[i];
             *sample = audio::apply_volume(s, unsafe { OUTPUT_VOLUME});
             // expand one sample to 6 to convert 16khz mono to 48khz stereo
-            if j%6 == 0 && i < unsafe { RECORD_SAMPLE_COUNT } as usize
+            if j%6 == 0 && i < unsafe { RECORD_SAMPLE_COUNT } as usize && i < out_samples.len() - 1
              {
                 i += 1;
             }
@@ -587,6 +634,6 @@ async fn play_target(hubert: softvc::Hubert, acoustic: softvc::Acoustic, hifigan
     output_stream.play().map_err(|e| AppError::PlayStreamError("output", e))?;
     // FIXME ¯\_(ツ)_/¯
     // the goal of this is to stop playback before we run out of samples but it's super kludgey
-    std::thread::sleep(core::time::Duration::from_secs_f32(unsafe { RECORD_SAMPLE_COUNT } as f32 / 16000.0));
+    std::thread::sleep(core::time::Duration::from_secs_f32(unsafe { RECORD_SAMPLE_COUNT } as f32 / MODEL_SAMPLE_RATE as f32));
     Ok(())
 }

@@ -3,3 +3,4 @@ target/
 *.recast
 *.recast_base
 *.pt
+*.jit

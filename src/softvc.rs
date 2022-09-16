@@ -3,12 +3,13 @@ use std::path::PathBuf;
 use tch::{CModule, Tensor};
 use crate::AppError;
 
-type ModelArc = Arc<Mutex<Option<CModule>>>;
+pub type ModelArc = Arc<Mutex<Option<CModule>>>;
 
 pub trait Model {
     fn load(&self, path: PathBuf) -> Result <(), AppError> {
         let mut lock = self.get_inner().try_lock().map_err(|_e| AppError::LockError)?;
         let mut inner_model = CModule::load(path).map_err(|_e| AppError::ModelLoadError)?;
+        inner_model.to(tch::Device::Cuda(0), tch::Kind::Float, false);
         inner_model.set_eval();
         *lock = Some(inner_model);
         Ok(())
@@ -80,7 +81,6 @@ impl Hifigan {
 }
 
 pub fn inference(in_samples: &[f32], hubert: Hubert, acoustic: Acoustic, hifigan: Hifigan) -> Result<Vec<f32>, AppError> {
-    tch::jit::set_graph_executor_optimize(false);
     let hubert_start_time = std::time::Instant::now();
     let hubert_out = hubert.forward(in_samples)?;
     let hubert_end_time = std::time::Instant::now();

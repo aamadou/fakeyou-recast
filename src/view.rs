@@ -179,18 +179,18 @@ pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a V
                 Slider::new(&mut view_state.slider_2_state, 0.0..=100.0, view_state.slider_2_value, Message::Slider2Changed)
             )
         )
-        .push(
-            Row::new().spacing(10)
-            .push(Text::new("Speaker Threshold: "))
-            .push(
-                Slider::new(&mut view_state.slider_3_state, 0.000005..=0.000100, view_state.slider_3_value, Message::Slider3Changed).step(0.000001)
-            )
-            //FIXME
-            .push(Text::new("Buffer Size: "))
-            .push(
-                Slider::new(&mut view_state.slider_4_state, 4800.0..=67200.0, view_state.slider_4_value, Message::Slider4Changed).step(4800.0)
-            )
-        )
+        //.push(
+            //Row::new().spacing(10)
+            //.push(Text::new("Speaker Threshold: "))
+            //.push(
+                //Slider::new(&mut view_state.slider_3_state, 0.000005..=0.000100, view_state.slider_3_value, Message::Slider3Changed).step(0.000001)
+            //)
+            ////FIXME
+            //.push(Text::new("Buffer Size: "))
+            //.push(
+                //Slider::new(&mut view_state.slider_4_state, 4800.0..=67200.0, view_state.slider_4_value, Message::Slider4Changed).step(4800.0)
+            //)
+        //)
         .push(
             Row::new().spacing(10)
             .push(
