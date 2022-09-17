@@ -21,7 +21,7 @@ web-sys = { version = "0.3.22", features=["console"] }
 console_error_panic_hook = "0.1.5"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-cpal = "0.13.5"
+cpal = "0.14.0"
 
 [profile.release]
 #lto = true
