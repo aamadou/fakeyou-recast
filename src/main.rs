@@ -1,3 +1,6 @@
+// launch as a gui app on windows without a command prompt
+#![windows_subsystem = "windows"]
+
 use std::{path::PathBuf, env};
 use iced::{executor, Application, Element, Command, Settings, window, Subscription, keyboard::{self, KeyCode}, window::icon::Icon};
 use iced_native::{event, subscription, Event};
