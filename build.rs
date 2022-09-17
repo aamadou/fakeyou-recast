@@ -1,7 +1,11 @@
+#[cfg(windows)]
 fn main() {
-    if cfg!(target_os = "windows") {
+    if cfg!("windows") {
         let mut res = winres::WindowsResource::new();
         res.set_icon("assets/FakeYou_Favicon.ico");
         res.compile().unwrap();
     }
 }
+
+#[cfg(unix)]
+fn main () { }
