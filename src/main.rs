@@ -1,5 +1,5 @@
 use std::{path::PathBuf, env};
-use iced::{executor, Application, Element, Command, Settings, window, Subscription, keyboard::{self, KeyCode}};
+use iced::{executor, Application, Element, Command, Settings, window, Subscription, keyboard::{self, KeyCode}, window::icon::Icon};
 use iced_native::{event, subscription, Event};
 use cpal::{SampleRate, BufferSize, SampleFormat};
 use cpal::traits::{DeviceTrait, StreamTrait};
@@ -49,12 +49,15 @@ pub enum AppError {
     FileDialogError(PathBuf),
 }
 
+const ICON: &[u8; 262144] = include_bytes!("../assets/icon.data");
+
 pub fn main() -> iced::Result {
     let settings = Settings {
         window: window::Settings {
             size: (WINDOW_WIDTH, WINDOW_HEIGHT),
             resizable: true,
             decorations: true,
+            icon: Some(Icon::from_rgba(ICON.to_vec(), 256, 256).unwrap()),
             ..Default::default()
         },
         ..Default::default()
