@@ -105,12 +105,13 @@ pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a V
         .push(Button::new(&mut view_state.model_browse_state, Text::new("Browse")).on_press(Message::ModelBrowsePressed).into());
     model_selection_row_elems
         .push(Text::new(selected_model_str).into());
-        //model_selection_row_elems
-            //.push(Text::new("Select Vocoder: ").into());
-        //model_selection_row_elems
-            //.push(Button::new(&mut view_state.hifigan_browse_state, Text::new("Browse")).on_press(Message::HifiganBrowsePressed).into());
-        //model_selection_row_elems
-        //.push(Text::new(selected_hifigan_str).into());
+        // TODO don't forget to remove this vocoder button when the models are merged to one file 
+        model_selection_row_elems
+            .push(Text::new("Select Vocoder: ").into());
+        model_selection_row_elems
+            .push(Button::new(&mut view_state.hifigan_browse_state, Text::new("Browse")).on_press(Message::HifiganBrowsePressed).into());
+        model_selection_row_elems
+        .push(Text::new(selected_hifigan_str).into());
     if view_state.show_debug {
         model_selection_row_elems
             .push(Text::new("Select Debug Model: ").into());
