@@ -1,14 +1,15 @@
 // launch as a gui app on windows without a command prompt
 #![windows_subsystem = "windows"]
 
-use std::{path::PathBuf, env};
-use iced::{executor, Application, Element, Command, Settings, window, Subscription, keyboard::{self, KeyCode}, window::icon::Icon};
+use std::{path::{PathBuf, Path}, env, io, fs::OpenOptions};
+use iced::{executor, Application, Element, Command, Settings, window::{self, Icon}, Subscription, keyboard::{self, KeyCode}};
 use iced_native::{event, subscription, Event};
 use cpal::{SampleRate, BufferSize, SampleFormat};
 use cpal::traits::{DeviceTrait, StreamTrait};
 use ringbuf::RingBuffer;
 use native_dialog::{FileDialog, MessageDialog};
 use thiserror::Error;
+use log::{info, trace, warn, error};
 
 mod view;
 mod audio;
@@ -55,6 +56,7 @@ pub enum AppError {
 const ICON: &[u8; 262144] = include_bytes!("../assets/icon.data");
 
 pub fn main() -> iced::Result {
+    let _ = init_logging(); //nowhere to log an error if one happens here
     let settings = Settings {
         window: window::Settings {
             size: (WINDOW_WIDTH, WINDOW_HEIGHT),
@@ -66,6 +68,22 @@ pub fn main() -> iced::Result {
         ..Default::default()
     };
     App::run(settings)
+}
+
+fn init_logging() -> Result<(), io::Error> {
+    std::fs::create_dir_all("./logs")?;
+    let date = chrono::Local::now();
+    let date_string = date.format("%Y-%m-%d");
+    let file_path_str = format!("./logs/{}.txt", date_string);
+    let log_file;
+    if std::path::Path::new(&file_path_str).exists() {
+       log_file = OpenOptions::new().write(true).append(true).open(file_path_str)? 
+    } else {
+        log_file = OpenOptions::new().write(true).create(true).open(file_path_str)? 
+    }
+    simple_logging::log_to(log_file, log::LevelFilter::Info);
+    info!("Logging started");
+    Ok(())
 }
 
 //FIXME unsafe
@@ -118,6 +136,7 @@ pub enum Message {
 fn handle_errors(res: Result<(), AppError>) -> Message {
     if let Some(e) = res.err() {
         MessageDialog::new().set_type(native_dialog::MessageType::Error).set_title("FakeYou Recast Error").set_text(&format!("{}", e)).show_alert().unwrap();
+        error!("{}", e)
     }
     Message::None
 }
@@ -210,7 +229,7 @@ impl Application for App {
                     let input_device_name = self.view_state.input_device_list_selected.clone();
                     let input_file = self.view_state.input_browse_selected.clone();
                     let output_device_name = self.view_state.output_device_list_selected.clone();
-                    let output_file = self.view_state.input_browse_selected.clone();
+                    let output_file = self.view_state.output_browse_selected.clone();
                     let input_device_res = audio::get_input_device(input_device_name, input_file);
                     let mut input_device = audio::DeviceType::None;
                     match input_device_res {
