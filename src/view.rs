@@ -105,12 +105,12 @@ pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a V
         .push(Button::new(&mut view_state.model_browse_state, Text::new("Browse")).on_press(Message::ModelBrowsePressed).into());
     model_selection_row_elems
         .push(Text::new(selected_model_str).into());
-        model_selection_row_elems
-            .push(Text::new("Select Vocoder: ").into());
-        model_selection_row_elems
-            .push(Button::new(&mut view_state.hifigan_browse_state, Text::new("Browse")).on_press(Message::HifiganBrowsePressed).into());
-        model_selection_row_elems
-        .push(Text::new(selected_hifigan_str).into());
+        //model_selection_row_elems
+            //.push(Text::new("Select Vocoder: ").into());
+        //model_selection_row_elems
+            //.push(Button::new(&mut view_state.hifigan_browse_state, Text::new("Browse")).on_press(Message::HifiganBrowsePressed).into());
+        //model_selection_row_elems
+        //.push(Text::new(selected_hifigan_str).into());
     if view_state.show_debug {
         model_selection_row_elems
             .push(Text::new("Select Debug Model: ").into());
@@ -124,21 +124,25 @@ pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a V
     let mut file_selection_row_elems: Vec<Element<Message>> = vec![];
     if view_state.input_device_list_selected == Some(String::from("From file"))
     {
+        let selected_input_file_str = if view_state.input_browse_selected.is_none() { "" } else {view_state.input_browse_selected.as_ref().unwrap_or(&empty_pathbuf).file_name().unwrap_or_default().to_str().unwrap_or_default() };
         file_selection_row_elems.push(
             Text::new("Input File: ").into()
         );
         file_selection_row_elems.push(
             Button::new(&mut view_state.input_browse_state, Text::new("Browse")).on_press(Message::InputBrowsePressed).into()
         );
+        file_selection_row_elems.push(Text::new(selected_input_file_str).into());
     }
     if view_state.output_device_list_selected == Some(String::from("To file"))
     {
+        let selected_output_file_str = if view_state.output_browse_selected.is_none() { "" } else {view_state.output_browse_selected.as_ref().unwrap_or(&empty_pathbuf).file_name().unwrap_or_default().to_str().unwrap_or_default() };
         file_selection_row_elems.push(
             Text::new("Output File: ").into()
         );
         file_selection_row_elems.push(
             Button::new(&mut view_state.output_browse_state, Text::new("Browse")).on_press(Message::OutputBrowsePressed).into()
         );
+        file_selection_row_elems.push(Text::new(selected_output_file_str).into());
     }
     let file_selection_row = Row::with_children(file_selection_row_elems).spacing(10);
 
@@ -194,13 +198,21 @@ pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a V
         .push(
             Row::new().spacing(10)
             .push(
-                Button::new(&mut view_state.record_state, if recording { Text::new("Stop")} else {Text::new("Record")}).on_press(Message::RecordPressed)
+                Button::new(&mut view_state.record_state, 
+                    if view_state.input_device_list_selected == Some(String::from("From file")) { Text::new("Read File")  }
+                    else if recording { Text::new("Stop")}
+                    else {Text::new("Record")}).on_press(Message::RecordPressed)
             )
             .push(
                 Button::new(&mut view_state.play_source_state, Text::new("Play Source")).on_press(Message::PlaySourcePressed)
             )
             .push(
-                Button::new(&mut view_state.play_target_state, Text::new("Play Target")).on_press(Message::PlayTargetPressed)
+                Button::new(&mut view_state.play_target_state, 
+                    if view_state.output_device_list_selected == Some(String::from("To file")) { Text::new("Write File") }
+                    else {
+                        Text::new("Play Target")
+                    })
+                    .on_press(Message::PlayTargetPressed)
             )
             .push(
                 Button::new(&mut view_state.realtime_record_state, if realtime_recording { Text::new("Stop") } else {Text::new("Realtime\n(experimental)")}).on_press(Message::RealtimeRecordPressed)
