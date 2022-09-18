@@ -39,7 +39,7 @@ pub enum AppError {
     ChannelSendError/*(#[from] std::sync::mpsc::SendError)*/,
     #[error("IO Error\n{0}")]
     IoError(#[from] std::io::Error),
-    #[error("WAV read/write error\n{0}")]
+    #[error("WAV read/write error\n{0}\nInput wav files must be 16KHz mono in 32-bit float format")]
     HoundError(#[from] hound::Error),
     #[error("Attempted to lock a mutex that is already locked")]
     LockError/*(#[from] std::sync::TryLockError)*/,
@@ -203,7 +203,7 @@ impl Application for App {
                 if self.realtime_recording && self.realtime_record_sender.is_some() {
                     self.realtime_record_sender.as_ref().unwrap().send((self.realtime_recording.clone(), self.view_state.slider_1_value.clone(), self.view_state.slider_2_value.clone())).unwrap();
                 }
-                if self.record_sender.is_some() {
+                if self.recording && self.record_sender.is_some() {
                     self.record_sender.as_ref().unwrap().send((self.recording.clone(), self.view_state.slider_1_value.clone())).unwrap();
                 }
             }
@@ -377,33 +377,34 @@ impl Application for App {
                 }
             }
             Message::RecordPressed => { 
-                if self.recording {
+                let input_device_name = self.view_state.input_device_list_selected.clone();
+                if self.recording && input_device_name != Some(String::from("From file")) {
                     if self.record_sender.is_some()
                     {
                         let _res = self.record_sender.as_ref().unwrap().send((false, self.view_state.slider_1_value.clone())).map_err(|_e| AppError::ChannelSendError);
                         //handle_errors(res); 
                         //This error is kind of pointless because it's usually
                         //the result of another error, ignoring it to avoid spam
+                        self.recording = !self.recording;
                     }
                 } else {
                     let (record_sender, record_receiver) = std::sync::mpsc::channel();
                     self.record_sender = Some(record_sender);
-
-                    let input_device_name = self.view_state.input_device_list_selected.clone();
                     let input_file = self.view_state.input_browse_selected.clone();
-                    let input_device_res = audio::get_input_device(input_device_name, input_file);
+                    let input_device_res = audio::get_input_device(input_device_name.clone(), input_file);
                     let mut input_device = audio::DeviceType::None;
                     match input_device_res {
                         Err(e) => { handle_errors(Err(e)); },
                         Ok(inp) => { input_device = inp; }
                     };
 
-                    let input_device_name = self.view_state.input_device_list_selected.clone();
                     command = Command::perform(start_recording(input_device, record_receiver), handle_errors); 
-                    self.record_sender.as_ref().unwrap().send((true, self.view_state.slider_1_value.clone())).unwrap();
+                    if input_device_name != Some(String::from("From file")) {
+                        self.record_sender.as_ref().unwrap().send((true, self.view_state.slider_1_value.clone())).unwrap();
+                        self.recording = !self.recording;
+                    }
                 }
 
-                self.recording = !self.recording;
 
             }
             Message::PlayTargetPressed => {
