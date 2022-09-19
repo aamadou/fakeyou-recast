@@ -70,18 +70,20 @@ pub fn main() -> iced::Result {
     App::run(settings)
 }
 
-fn init_logging() -> Result<(), io::Error> {
+fn init_logging() -> Result<(), fern::InitError> {
     std::fs::create_dir_all("./logs")?;
     let date = chrono::Local::now();
     let date_string = date.format("%Y-%m-%d");
     let file_path_str = format!("./logs/{}.txt", date_string);
-    let log_file;
-    if std::path::Path::new(&file_path_str).exists() {
-       log_file = OpenOptions::new().write(true).append(true).open(file_path_str)? 
-    } else {
-        log_file = OpenOptions::new().write(true).create(true).open(file_path_str)? 
-    }
-    simple_logging::log_to(log_file, log::LevelFilter::Info);
+    fern::Dispatch::new()
+        .level_for("fakeyou_recast", log::LevelFilter::Info)
+        .level_for("fakeyou_recast::softvc", log::LevelFilter::Info)
+        .level_for("fakeyou_recast::audio", log::LevelFilter::Info)
+        .level_for("fakeyou_recast::vad", log::LevelFilter::Info)
+        // we only want logs from our app not from all our dependencies
+        .level(log::LevelFilter::Off)
+        .chain(fern::log_file(file_path_str)?)
+        .apply()?;
     info!("Logging started");
     Ok(())
 }

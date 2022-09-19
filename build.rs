@@ -7,5 +7,5 @@ fn main() {
     }
 }
 
-#[cfg(unix)]
+#[cfg(not(windows))]
 fn main () { }
