@@ -1,7 +1,7 @@
 // launch as a gui app on windows without a command prompt
 #![windows_subsystem = "windows"]
 
-use std::{path::{PathBuf, Path}, env, io, fs::OpenOptions};
+use std::{path::PathBuf, env};
 use iced::{executor, Application, Element, Command, Settings, window::{self, Icon}, Subscription, keyboard::{self, KeyCode}};
 use iced_native::{event, subscription, Event};
 use cpal::{SampleRate, BufferSize, SampleFormat};
@@ -76,6 +76,14 @@ fn init_logging() -> Result<(), fern::InitError> {
     let date_string = date.format("%Y-%m-%d");
     let file_path_str = format!("./logs/{}.txt", date_string);
     fern::Dispatch::new()
+        .format(|out, message, record| {
+            out.finish(format_args!(
+                "{}[{}] {}",
+                chrono::Local::now().format("[%H:%M:%S.%3f]"),
+                record.level(),
+                message
+            ))
+        })
         .level_for("fakeyou_recast", log::LevelFilter::Info)
         .level_for("fakeyou_recast::softvc", log::LevelFilter::Info)
         .level_for("fakeyou_recast::audio", log::LevelFilter::Info)
@@ -122,8 +130,6 @@ pub enum Message {
     ShowDebugPressed,
     Slider1Changed(f32),
     Slider2Changed(f32),
-    //Slider3Changed(f32),
-    //Slider4Changed(f32),
     RecordPressed,
     PlayTargetPressed,
     PlaySourcePressed,
@@ -222,7 +228,10 @@ impl Application for App {
                 if self.realtime_recording {
                     if self.realtime_record_sender.is_some()
                     {
-                        let _res = self.realtime_record_sender.as_ref().unwrap().send((false, self.view_state.slider_1_value.clone(), self.view_state.slider_2_value.clone()));
+                        let res = self.realtime_record_sender.as_ref().unwrap().send((false, self.view_state.slider_1_value.clone(), self.view_state.slider_2_value.clone()));
+                        if let Some(e) = res.err() {
+                            error!("{}", e);
+                        }
                     }
                 } else {
                     let (realtime_record_sender, realtime_record_receiver) = std::sync::mpsc::channel();
@@ -250,7 +259,10 @@ impl Application for App {
                     let hifigan = self.hifigan.clone();
                     let vad = self.vad.clone();
                     command = Command::perform(start_realtime(realtime_record_receiver, input_device, output_device, hubert, acoustic, hifigan, vad), handle_errors);
-                    let _res = self.realtime_record_sender.as_ref().unwrap().send((true, self.view_state.slider_1_value.clone(), self.view_state.slider_2_value.clone()));
+                    let res = self.realtime_record_sender.as_ref().unwrap().send((true, self.view_state.slider_1_value.clone(), self.view_state.slider_2_value.clone()));
+                    if let Some(e) = res.err() {
+                        error!("{}", e);
+                    }
                 }
                 self.realtime_recording = !self.realtime_recording;
             }
@@ -269,6 +281,7 @@ impl Application for App {
                     .show_open_single_file();
                     match path {
                         Ok(Some(p)) => {
+                            info!("Opening model: {}", p.clone().file_name().unwrap_or_default().to_string_lossy());
                             let acoustic = self.acoustic.clone();
                             let path = p.clone();
                             // TODO use async instead of threads and handle errors
@@ -360,8 +373,9 @@ impl Application for App {
                     .add_filter("WAV audio file", &["wav"])
                     .show_open_single_file();
                 match path {
-                    Ok(o) => {
-                        self.view_state.input_browse_selected = o;
+                    Ok(i) => {
+                        info!("Selected file {} for input", i.clone().unwrap_or_default().file_name().unwrap_or_default().to_string_lossy());
+                        self.view_state.input_browse_selected = i;
                     },
                     Err(_e) => { handle_errors(Err(AppError::FileDialogError(PathBuf::from("")))); }
                 }
@@ -373,6 +387,7 @@ impl Application for App {
                     .show_save_single_file();
                 match path {
                     Ok(o) => {
+                        info!("Selected file {} for output", o.clone().unwrap_or_default().file_name().unwrap_or_default().to_string_lossy());
                         self.view_state.output_browse_selected = o;
                     },
                     Err(_e) => { handle_errors(Err(AppError::FileDialogError(PathBuf::from("")))); }
@@ -383,7 +398,10 @@ impl Application for App {
                 if self.recording && input_device_name != Some(String::from("From file")) {
                     if self.record_sender.is_some()
                     {
-                        let _res = self.record_sender.as_ref().unwrap().send((false, self.view_state.slider_1_value.clone())).map_err(|_e| AppError::ChannelSendError);
+                        let res = self.record_sender.as_ref().unwrap().send((false, self.view_state.slider_1_value.clone()));
+                        if let Some(e) = res.err() {
+                            error!("{}", e);
+                        }
                         //handle_errors(res); 
                         //This error is kind of pointless because it's usually
                         //the result of another error, ignoring it to avoid spam
@@ -438,6 +456,7 @@ impl Application for App {
                 command = Command::perform(play_source(output_device), handle_errors)
             }
             Message::InputDeviceChanged(new_device) => {
+                info!("Selected {} for input", new_device);
                 self.view_state.input_device_list_selected = Some(new_device);
                 // Restart recording if currently recording and the device changes
                 //if self.realtime_recording {
@@ -451,6 +470,7 @@ impl Application for App {
                 //}
             }
             Message::OutputDeviceChanged(new_device) => {
+                info!("Selected {} for output", new_device);
                 self.view_state.output_device_list_selected = Some(new_device);
                 // Restart recording if currently recording and the device changes
                 //if self.realtime_recording {
@@ -494,6 +514,7 @@ impl Application for App {
 /// Realtime record => record and playback at the same time
 async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32, f32)>, input_device: audio::DeviceType, output_device: audio::DeviceType, hubert: softvc::Hubert, acoustic: softvc::Acoustic, hifigan: softvc::Hifigan, vad: vad::Vad) -> Result<(), AppError>
 {
+    info!("Started realtime recording from {} with playback on {}", input_device, output_device);
     let input_config = cpal::StreamConfig { channels: 1, sample_rate: SampleRate(48000), buffer_size: BufferSize::Fixed(IN_BUFFER_SIZE as u32) };
     let output_config = cpal::StreamConfig { channels: 2, sample_rate: SampleRate(48000), buffer_size: BufferSize::Fixed(OUT_BUFFER_SIZE as u32) };
     let ring1: RingBuffer<f32> = RingBuffer::new(RINGBUFFER1_SIZE);
@@ -521,9 +542,7 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
     };
 
     let mut p = 0;
-    let mut output_start_time = std::time::Instant::now();
     let output_data_fn = move |data: &mut cpal::Data, _: &cpal::OutputCallbackInfo| {
-        println!("consumer1_len {}", consumer1.len());
         if consumer1.len() >= CHUNK_SIZE {
             unsafe { consumer1.pop_slice(&mut INPUT_CHUNK); }
             let mut i = 0;
@@ -542,7 +561,6 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
             let mut v = 0;
             unsafe { &SOFTVC_INPUT[..CHUNK_SIZE_16K] }.chunks(VAD_SIZE).for_each(|chunk| {
                 unsafe { VAD_CHUNK.copy_from_slice(chunk)};
-                let vad_start_time = std::time::Instant::now();
                 let vad_res = vad.forward(unsafe { &VAD_CHUNK});
                 let mut vad_tensor = tch::Tensor::of_slice(&[0.0]);
                 match vad_res {
@@ -554,23 +572,19 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
                         vad_tensor = t;
                     }
                 }
-                let vad_end_time = std::time::Instant::now();
-                println!("vad time {:?}", vad_end_time - vad_start_time);
                 unsafe { VAD_CONFIDENCE[v] = vad_tensor.double_value(&[0]) as f32; }
                 v += 1;
             });
-            println!("voice activity confidence {:?}", unsafe { VAD_CONFIDENCE });
             
             // Dupe SOFTVC_INPUT until it is TENSOR_SIZE long
             for k in 1..(TENSOR_SIZE/CHUNK_SIZE_16K) {
                 unsafe { SOFTVC_INPUT.copy_within(0..CHUNK_SIZE_16K, CHUNK_SIZE_16K*k)};
             }
-            println!("out_data_len {}", data.len());
             let res = softvc::inference(unsafe { &SOFTVC_INPUT }, hubert.clone(), acoustic.clone(), hifigan.clone());
             match res {
                 Err(e) => {
                     //handle_errors(Err(e));
-                    println!("{}", e);
+                    error!("{}", e);
                 },
                 Ok(samples) => {
                     samples.iter()
@@ -593,8 +607,6 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
             }
         }
 
-
-        println!("consumer2 len {}", consumer2.len());
         let data_slice: &mut [f32] = data.as_slice_mut().unwrap();
         if consumer2.len() >= RINGBUFFER2_SIZE  / 2
         {
@@ -604,14 +616,11 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
             }
         } else {
             // send silence
-            println!("no data");
+            warn!("No data received for playback");
             data_slice.fill(0.0);
         }
         if p == RINGBUFFER2_SIZE / 2 {
-            let output_end_time = std::time::Instant::now();
-            println!("output time: {:?}", output_end_time - output_start_time);
             p = 0;
-            output_start_time = std::time::Instant::now();
         }
     };
 
@@ -651,6 +660,7 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
             unsafe { INPUT_VOLUME = ivol };
             unsafe { OUTPUT_VOLUME = ovol };
         } else {
+            info!("Stopped realtime recording");
             break
         }
     }
@@ -659,6 +669,7 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
 
 /// Record to a buffer for later conversion (non-realtime)
 async fn start_recording(input_device: audio::DeviceType, receiver: std::sync::mpsc::Receiver<(bool, f32)>) -> Result<(), AppError> {
+    info!("Recording started from {}", input_device);
     let mut vec = audio::record_audio_vec(input_device, receiver)?;
     //FIXME unsafe and bad
     if vec.len() < WAV_TENSOR_SIZE {
@@ -673,6 +684,7 @@ async fn start_recording(input_device: audio::DeviceType, receiver: std::sync::m
 
 /// Play back the input buffer
 async fn play_source(output_device: audio::DeviceType) -> Result<(), AppError> {
+    info!("Playing source audio on {}", output_device);
     audio::play_audio_buf(output_device, unsafe { &RECORD_BUF[..RECORD_SAMPLE_COUNT] }, unsafe { OUTPUT_VOLUME })
 }
 
@@ -683,14 +695,15 @@ async fn play_source(output_device: audio::DeviceType) -> Result<(), AppError> {
 /// If we are too slow, it could be a nice time saver for that case though.
 async fn play_target(hubert: softvc::Hubert, acoustic: softvc::Acoustic, hifigan: softvc::Hifigan, vad: vad::Vad, output_device: audio::DeviceType) -> Result<(), AppError> {
     //TODO some kind of loading spinner or something while this is happening
+    info!("Running inference and playing target audio on {}", output_device);
     let mut out_samples = softvc::inference(unsafe {&RECORD_BUF[..RECORD_SAMPLE_COUNT]}, hubert, acoustic, hifigan)?;
+    info!("Inference finished");
 
     
     // Find active 100ms chunks with Silero VAD
     let mut vad_confidence: Vec<f32> = Vec::new();
     unsafe { &RECORD_BUF[..RECORD_SAMPLE_COUNT] }.chunks(VAD_SIZE).for_each(|chunk| {
         let mut vad_tensor = tch::Tensor::of_slice(&[0.0]);
-        let vad_start_time = std::time::Instant::now();
         let vad_res = vad.forward(&chunk);
         match vad_res {
             Err(e) => {
@@ -701,11 +714,8 @@ async fn play_target(hubert: softvc::Hubert, acoustic: softvc::Acoustic, hifigan
                 vad_tensor = t;
             }
         }
-        let vad_end_time = std::time::Instant::now();
-        println!("vad time {:?}", vad_end_time - vad_start_time);
         vad_confidence.push(vad_tensor.double_value(&[0]) as f32)
     });
-    println!("voice activity confidence {:?}", vad_confidence);
 
     // nuke inactive chunks from the output buffer
     for v in 0..out_samples.len()/VAD_SIZE {
@@ -718,7 +728,7 @@ async fn play_target(hubert: softvc::Hubert, acoustic: softvc::Acoustic, hifigan
     //audio::play_audio_buf(output_device, &out_samples, unsafe { OUTPUT_VOLUME })
     
     match output_device {
-        DeviceType::File(f) => {
+        DeviceType::File((f, _)) => {
             let spec = hound::WavSpec {
                 channels: 1,
                 sample_rate: 16000,

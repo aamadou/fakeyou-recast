@@ -93,11 +93,11 @@ pub fn inference(in_samples: &[f32], hubert: Hubert, acoustic: Acoustic, hifigan
     let hifigan_end_time = std::time::Instant::now();
 
     // FIXME: don't forget to uncomment this if statement to hide our secrets before release
-    //if cfg!(debug_assertions) {
+    if cfg!(debug_assertions) {
         println!("hubert: {:?}", hubert_end_time - hubert_start_time);
         println!("acoustic: {:?}", acoustic_end_time - acoustic_start_time);
         println!("hifigan: {:?}", hifigan_end_time - hifigan_start_time);
-    //}
+    }
 
     Ok(out_samples)
 }

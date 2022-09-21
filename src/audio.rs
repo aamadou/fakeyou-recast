@@ -1,6 +1,7 @@
 use std::{fs::File, path::PathBuf};
 use cpal::{self, SampleRate, BufferSize, traits::{DeviceTrait, HostTrait, StreamTrait}};
 use crate::AppError;
+use log::info;
 
 pub fn get_input_device_list() -> Vec<String> {
     let input_devices = cpal::default_host().input_devices();
@@ -21,17 +22,27 @@ pub fn get_output_device_list() -> Vec<String> {
 }
 
 pub enum DeviceType {
-    File(File),
+    File((File, PathBuf)),
     Device(cpal::Device),
     None,
 }
 
+impl std::fmt::Display for DeviceType {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+        match self {
+            Self::File((_, path)) =>  { write!(f, "File: {}",  path.to_string_lossy())},
+            Self::Device(d) => { write!(f, "Device: {}", d.name().map_err(|_e| std::fmt::Error::default())?)},
+            Self::None => { write!(f, "No Device")},
+        }
+    }
+}
+
 pub fn get_input_device(input_device_name: Option<String>, input_file_path: Option<PathBuf>) -> Result<DeviceType, AppError> {
-    let mut input_device = DeviceType::None;
+    let input_device;
     if let Some(input_device_name) = input_device_name {
         if input_device_name == "From file" {
-            let file = File::open(input_file_path.ok_or(AppError::NoFile("input"))?).map_err(|e| AppError::IoError(e))?;
-            input_device = DeviceType::File(file);
+            let file = File::open(input_file_path.clone().ok_or(AppError::NoFile("input"))?).map_err(|e| AppError::IoError(e))?;
+            input_device = DeviceType::File((file, input_file_path.unwrap_or_default()));
         }
         else {
             let host = cpal::default_host();
@@ -52,12 +63,11 @@ pub fn get_input_device(input_device_name: Option<String>, input_file_path: Opti
 }
 
 pub fn get_output_device(output_device_name: Option<String>, output_file_path: Option<PathBuf>) -> Result<DeviceType, AppError> {
-    let mut output_device = DeviceType::None;
-    let file: Option<std::fs::File> = None;
+    let output_device;
     if let Some(output_device_name) = output_device_name {
         if output_device_name == "To file" {
-            let file = File::create(output_file_path.ok_or(AppError::NoFile("output"))?).map_err(|e| AppError::IoError(e))?;
-            output_device = DeviceType::File(file);
+            let file = File::create(output_file_path.clone().ok_or(AppError::NoFile("output"))?).map_err(|e| AppError::IoError(e))?;
+            output_device = DeviceType::File((file, output_file_path.unwrap_or_default()));
         }
         else {
             let host = cpal::default_host();
@@ -87,7 +97,7 @@ pub fn apply_volume(sample: f32, volume: f32) -> f32 {
 /// Play a 16KHz mono audio buffer on a 48KHz stereo target, applying the chosen volume
 pub fn play_audio_buf(output_device: DeviceType, buf: &'static [f32], volume: f32) -> Result<(), AppError> {
     match output_device {
-        DeviceType::File(f) => {
+        DeviceType::File((f, _)) => {
             let spec = hound::WavSpec {
                 channels: 1,
                 sample_rate: 16000,
@@ -143,9 +153,10 @@ pub fn play_audio_buf(output_device: DeviceType, buf: &'static [f32], volume: f3
 pub fn record_audio_vec(input_device: DeviceType, receiver: std::sync::mpsc::Receiver<(bool, f32)>) -> Result<Vec<f32>, AppError>
 {
     match input_device {
-        DeviceType::File(f) => {
+        DeviceType::File((f, _)) => {
             let mut reader = hound::WavReader::new(f).map_err(|e| AppError::HoundError(e))?;
             let record_vec: Result<Vec<f32>, AppError> = reader.samples::<f32>().map(|s| s.map_err(|e| AppError::HoundError(e))).collect();
+            info!("Recording stopped");
             record_vec
         },
         DeviceType::Device(d) =>
@@ -194,6 +205,7 @@ pub fn record_audio_vec(input_device: DeviceType, receiver: std::sync::mpsc::Rec
                     atomic_vol2.store(ivol.to_bits(), std::sync::atomic::Ordering::Relaxed);
                     std::thread::sleep(std::time::Duration::from_millis(50));
                 } else {
+                    info!("Recording stopped");
                     break;
                 }
             }
@@ -216,7 +228,7 @@ pub fn record_audio_fixed_size(input_device: DeviceType, buf: &'static mut [f32]
 
 
     match input_device {
-        DeviceType::File(f) => {
+        DeviceType::File((f, _)) => {
             let mut reader = hound::WavReader::new(f).map_err(|e| AppError::HoundError(e))?;
             reader.samples::<f32>().enumerate().try_for_each(|(i, sample)| 
             {
