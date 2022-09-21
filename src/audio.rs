@@ -1,7 +1,7 @@
 use std::{fs::File, path::PathBuf};
 use cpal::{self, SampleRate, BufferSize, traits::{DeviceTrait, HostTrait, StreamTrait}};
 use crate::AppError;
-use log::info;
+use log::{info, error};
 
 pub fn get_input_device_list() -> Vec<String> {
     let input_devices = cpal::default_host().input_devices();
@@ -180,7 +180,7 @@ pub fn record_audio_vec(input_device: DeviceType, receiver: std::sync::mpsc::Rec
 
             let input_data_fn = move |data: &[f32], _: &cpal::InputCallbackInfo| {
                 let maybe_lock = arc1.try_lock();
-                if maybe_lock.is_err() { println!("Failed to grab the lock in the input data fn") }
+                if maybe_lock.is_err() { error!("Failed to grab the lock in the input data fn") }
                 else {
                     let lock = maybe_lock.unwrap();
                     let mut record_vec = lock;
@@ -265,5 +265,5 @@ pub fn record_audio_fixed_size(input_device: DeviceType, buf: &'static mut [f32]
 
 //FIXME unpub this when the realtime audio code is moved in here
 pub fn err_fn(err: cpal::StreamError) {
-    eprintln!("Error: {:?}", err);
+    error!("{:?}", err);
 }

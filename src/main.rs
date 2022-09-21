@@ -143,8 +143,8 @@ pub enum Message {
 
 fn handle_errors(res: Result<(), AppError>) -> Message {
     if let Some(e) = res.err() {
+        error!("{}", e);
         MessageDialog::new().set_type(native_dialog::MessageType::Error).set_title("FakeYou Recast Error").set_text(&format!("{}", e)).show_alert().unwrap();
-        error!("{}", e)
     }
     Message::None
 }
@@ -522,9 +522,6 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
     let ring2: RingBuffer<f32> = RingBuffer::new(RINGBUFFER2_SIZE);
     let (mut producer2, mut consumer2) = ring2.split();
 
-    let mut input_fill_start_time: std::time::Instant = std::time::Instant::now();
-    #[allow(unused_assignments)]
-    let mut input_fill_end_time: std::time::Instant = std::time::Instant::now();
     let mut q = 0;
 
     let input_data_fn = move |data: &cpal::Data, _: &cpal::InputCallbackInfo| {
@@ -534,10 +531,7 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
             q += 1
         }
         if q == CHUNK_SIZE { 
-            input_fill_end_time = std::time::Instant::now();
-            println!("input time {:?}", input_fill_end_time - input_fill_start_time);
             q = 0;
-            input_fill_start_time = std::time::Instant::now();
         }
     };
 
@@ -565,8 +559,7 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
                 let mut vad_tensor = tch::Tensor::of_slice(&[0.0]);
                 match vad_res {
                     Err(e) => {
-                        println!("{}", e);
-
+                        error!("{}", e);
                     },
                     Ok(t) => {
                         vad_tensor = t;
@@ -706,8 +699,7 @@ async fn play_target(hubert: softvc::Hubert, acoustic: softvc::Acoustic, hifigan
         let vad_res = vad.forward(&chunk);
         match vad_res {
             Err(e) => {
-                println!("{}", e);
-
+                handle_errors(Err(e));
             },
             Ok(t) => {
                 vad_tensor = t;
