@@ -616,7 +616,6 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
             }
         } else {
             // send silence
-            warn!("No data received for playback");
             data_slice.fill(0.0);
         }
         if p == RINGBUFFER2_SIZE / 2 {
