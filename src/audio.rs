@@ -95,7 +95,7 @@ pub fn apply_volume(sample: f32, volume: f32) -> f32 {
 
 //FIXME maybe this should be more parameterizable and support resampling?
 /// Play a 16KHz mono audio buffer on a 48KHz stereo target, applying the chosen volume
-pub fn play_audio_buf(output_device: DeviceType, buf: &'static [f32], volume: f32) -> Result<(), AppError> {
+pub fn play_audio_buf(output_device: DeviceType, buf: Vec<f32>, volume: f32) -> Result<(), AppError> {
     match output_device {
         DeviceType::File((f, _)) => {
             let spec = hound::WavSpec {
@@ -221,6 +221,7 @@ pub fn record_audio_vec(input_device: DeviceType, receiver: std::sync::mpsc::Rec
 }
 
 //TODO volume control?
+//TODO cancel token
 #[allow(unused)]
 pub fn record_audio_fixed_size(input_device: DeviceType, buf: &'static mut [f32]) -> Result<(), AppError> {
     let input_config = cpal::StreamConfig { channels: 1, sample_rate: SampleRate(48000), buffer_size: BufferSize::Default};
