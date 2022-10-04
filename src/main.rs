@@ -48,7 +48,7 @@ pub enum AppError {
     #[error("No model is loaded")]
     NoModel,
     #[error("Inference failed to produce an output")]
-    ModelError,
+    ModelError(#[from] tch::TchError),
     #[error("File picker dialog failed to open for path:\n{0}")]
     FileDialogError(PathBuf),
 }
@@ -85,9 +85,15 @@ fn init_logging() -> Result<(), fern::InitError> {
             ))
         })
         .level_for("fakeyou_recast", log::LevelFilter::Info)
-        .level_for("fakeyou_recast::softvc", log::LevelFilter::Info)
+        
         .level_for("fakeyou_recast::audio", log::LevelFilter::Info)
-        .level_for("fakeyou_recast::vad", log::LevelFilter::Info)
+        .level_for("fakeyou_recast::softvc", log::LevelFilter::Info)
+        .level_for("fakeyou_recast::vad", log::LevelFilter::Info)   // commented out because I
+                                                                    // realized this leaks our
+                                                                    // model architecture (as a
+                                                                    // string),
+                                                                    // hopefully we don't need it
+                                                                    // for logging to work well
         // we only want logs from our app not from all our dependencies
         .level(log::LevelFilter::Off)
         .chain(fern::log_file(file_path_str)?)
@@ -715,6 +721,8 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
                 let mut vad_confidence: Vec<f32> = Vec::new();
                 chunk.chunks(VAD_SIZE).for_each(|vad_chunk| {
                     let mut vad_tensor = tch::Tensor::of_slice(&[0.0]);
+                    let mut vad_chunk = vad_chunk.to_vec();
+                    vad_chunk.resize(VAD_SIZE, 0.0);
                     let vad_res = vad.forward(&vad_chunk);
                     match vad_res {
                         Err(e) => {
@@ -724,12 +732,11 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
                             vad_tensor = t;
                         }
                     }
-                    vad_confidence.push(vad_tensor.double_value(&[0]) as f32)
+                    vad_confidence.push(vad_tensor.double_value(&[0]) as f32);
                 });
 
                 let mut softvc_input = Vec::new();
                 softvc_input.extend_from_slice(chunk);
-
 
                 let mut out_samples = softvc::inference(&softvc_input, hubert.clone(), acoustic.clone(), hifigan.clone())?;
 
@@ -759,6 +766,8 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
                 let mut vad_confidence: Vec<f32> = Vec::new();
                 chunk.chunks(VAD_SIZE).for_each(|vad_chunk| {
                     let mut vad_tensor = tch::Tensor::of_slice(&[0.0]);
+                    let mut vad_chunk = vad_chunk.to_vec();
+                    vad_chunk.resize(VAD_SIZE, 0.0);
                     let vad_res = vad.forward(&vad_chunk);
                     match vad_res {
                         Err(e) => {
@@ -814,7 +823,13 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
                         }
                     }
                 }
-                else { data.fill(0.0); }
+                else if consumer.len() >= data.len() {
+                    consumer.pop_slice(data);
+                }
+                else if consumer.len() <= data.len() {
+                    consumer.pop_slice(&mut data[..consumer.len()]);
+                    data[consumer.len()..].fill(0.0);
+                }
             };
 
             let output_stream = d.build_output_stream(&output_config, output_data_fn, audio::err_fn).map_err(|e| AppError::BuildOutputStreamError(e))?;

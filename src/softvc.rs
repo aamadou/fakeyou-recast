@@ -29,7 +29,7 @@ impl Hubert {
     pub fn forward(&self, samples: &[f32]) -> Result<tch::Tensor, AppError> {
         let tensor = Tensor::of_slice(&samples).unsqueeze(0).unsqueeze(0).to(tch::Device::Cuda(0));
         let model = self.0.try_lock().map_err(|_e| AppError::LockError)?;
-        model.as_ref().ok_or(AppError::NoModel)?.method_ts("units", &[tensor]).map_err(|_e| AppError::ModelError)
+        model.as_ref().ok_or(AppError::NoModel)?.method_ts("units", &[tensor]).map_err(|_e| AppError::ModelError(_e))
     }
     pub fn new() -> Self {
         Self(ModelArc::default())
@@ -46,7 +46,7 @@ impl Model for Acoustic {
 impl Acoustic {
     pub fn forward(&self, input: tch::Tensor) -> Result<tch::Tensor, AppError> {
         let model = self.0.try_lock().map_err(|_e| AppError::LockError)?;
-        model.as_ref().ok_or(AppError::NoModel)?.method_ts("generate", &[input]).map_err(|_e| AppError::ModelError)
+        model.as_ref().ok_or(AppError::NoModel)?.method_ts("generate", &[input]).map_err(|_e| AppError::ModelError(_e))
     }
     pub fn new() -> Self {
         Self(ModelArc::default())
@@ -66,7 +66,7 @@ impl Hifigan {
     pub fn forward(&self, input: tch::Tensor) -> Result<Vec<f32>, AppError> {
         let model = self.0.try_lock().map_err(|_e| AppError::LockError)?;
         let hifigan_output = tch::no_grad(|| {
-             model.as_ref().ok_or(AppError::NoModel)?.forward_ts(&[input]).map_err(|_e| AppError::ModelError)
+             model.as_ref().ok_or(AppError::NoModel)?.forward_ts(&[input]).map_err(|_e| AppError::ModelError(_e))
         })?;
         let sample_count = hifigan_output.size()[2];
         let samples = hifigan_output.reshape(&[sample_count]).to(tch::Device::Cpu);

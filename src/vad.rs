@@ -14,14 +14,14 @@ impl Vad {
         let tensor = tch::Tensor::of_slice(&samples).unsqueeze(0).to(tch::Device::Cuda(0));
         let model = self.0.try_lock().map_err(|_e| AppError::LockError)?;
         let output = tch::no_grad(|| {
-            model.as_ref().ok_or(AppError::NoModel)?.forward_is(&[IValue::Tensor(tensor), IValue::Int(MODEL_SAMPLE_RATE as i64)]).map_err(|_e| AppError::ModelError)
+            model.as_ref().ok_or(AppError::NoModel)?.forward_is(&[IValue::Tensor(tensor), IValue::Int(MODEL_SAMPLE_RATE as i64)]).map_err(|_e| AppError::ModelError(_e))
         })?;
 
         match output {
             IValue::Tensor(t) => {
                 Ok(t)
             },
-            _ => {Err(AppError::ModelError)}
+            _ => Err(AppError::ModelError(tch::TchError::UnknownKind(0)))
         }
     }
     pub fn new() -> Self {
