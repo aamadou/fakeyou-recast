@@ -254,7 +254,7 @@ impl Application for App {
                     {
                         let res = self.realtime_record_sender.as_ref().unwrap().send((false, self.view_state.slider_1_value.clone(), self.view_state.slider_2_value.clone()));
                         if let Some(e) = res.err() {
-                            error!("{}", e);
+                           error!("{}", e); 
                         }
                     }
                 } else {
@@ -554,6 +554,10 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
     let ring2: RingBuffer<f32> = RingBuffer::new(RINGBUFFER2_SIZE);
     let (mut producer2, mut consumer2) = ring2.split();
 
+    let arc_cancel_token = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let cancel_token1 = arc_cancel_token.clone();
+    let cancel_token2 = arc_cancel_token.clone();
+
     let mut q = 0;
 
     let input_data_fn = move |data: &cpal::Data, _: &cpal::InputCallbackInfo| {
@@ -591,7 +595,11 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
                 let mut vad_tensor = tch::Tensor::of_slice(&[0.0]);
                 match vad_res {
                     Err(e) => {
-                        error!("{}", e);
+                        // don't spam errors if there's already one known
+                        if !cancel_token1.load(std::sync::atomic::Ordering::Relaxed) {
+                            handle_errors(Err(e));
+                        }
+                        cancel_token1.store(true, std::sync::atomic::Ordering::Relaxed);
                     },
                     Ok(t) => {
                         vad_tensor = t;
@@ -608,8 +616,11 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
             let res = softvc::inference(unsafe { &SOFTVC_INPUT }, hubert.clone(), acoustic.clone(), hifigan.clone());
             match res {
                 Err(e) => {
-                    //handle_errors(Err(e));
-                    error!("{}", e);
+                    // don't spam errors if there's already one known
+                    if !cancel_token1.load(std::sync::atomic::Ordering::Relaxed) {
+                        handle_errors(Err(e));
+                    }
+                    cancel_token1.store(true, std::sync::atomic::Ordering::Relaxed);
                 },
                 Ok(samples) => {
                     samples.iter()
@@ -677,7 +688,13 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
     input_stream.play().map_err(|e| AppError::PlayStreamError("input", e))?;
     output_stream.play().map_err(|e| AppError::PlayStreamError("output", e))?;
     loop {
-
+        if cancel_token2.load(std::sync::atomic::Ordering::Relaxed) {
+            //FIXME set the button back to realtime instead of leaving it as stop.
+            info!("Cancelled realtime recording due to an error");
+            core::mem::drop(input_stream);
+            core::mem::drop(output_stream);
+            break;
+        }
         let (realtime_recording, ivol, ovol) = realtime_receiver.recv().map_err(|e| AppError::ChannelRecvError(e))?;
         if realtime_recording {
             //FIXME unsafe
@@ -685,7 +702,7 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
             unsafe { OUTPUT_VOLUME = ovol };
         } else {
             info!("Stopped realtime recording");
-            break
+            break;
         }
     }
     Ok(())
@@ -718,11 +735,10 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
                 sample_format: hound::SampleFormat::Float,
             };
             let mut writer = hound::WavWriter::new(f, spec).map_err(|e| AppError::HoundError(e))?;
-            for chunk in source.chunks(OFFLINE_CHUNK_SIZE) {
-
+            'outer: for chunk in source.chunks(OFFLINE_CHUNK_SIZE) {
                 // Find active 50ms chunks with Silero VAD
                 let mut vad_confidence: Vec<f32> = Vec::new();
-                chunk.chunks(VAD_SIZE).for_each(|vad_chunk| {
+                for vad_chunk in chunk.chunks(VAD_SIZE) {
                     let mut vad_tensor = tch::Tensor::of_slice(&[0.0]);
                     let mut vad_chunk = vad_chunk.to_vec();
                     vad_chunk.resize(VAD_SIZE, 0.0);
@@ -730,13 +746,14 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
                     match vad_res {
                         Err(e) => {
                             handle_errors(Err(e));
+                            break 'outer;
                         },
                         Ok(t) => {
                             vad_tensor = t;
                         }
                     }
                     vad_confidence.push(vad_tensor.double_value(&[0]) as f32);
-                });
+                }
 
                 let mut softvc_input = Vec::new();
                 softvc_input.extend_from_slice(chunk);
@@ -779,6 +796,12 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
             let ring2: RingBuffer<f32> = RingBuffer::new(resampler_input_size*2);
             let (mut producer2, mut consumer2) = ring2.split();
 
+
+            let arc_cancel_token = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let cancel_token1 = arc_cancel_token.clone();
+            let cancel_token2 = arc_cancel_token.clone();
+            let cancel_token3 = arc_cancel_token.clone();
+
             std::thread::spawn(move || {
             for chunk in source.chunks(resampler_input_size)
             {
@@ -792,7 +815,11 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
                     let vad_res = vad.forward(&vad_chunk);
                     match vad_res {
                         Err(e) => {
-                            handle_errors(Err(e));
+                            // don't spam errors if there's already one known
+                            if !cancel_token1.load(std::sync::atomic::Ordering::Relaxed) {
+                                handle_errors(Err(e));
+                            }
+                            cancel_token1.store(true, std::sync::atomic::Ordering::Relaxed);
                         },
                         Ok(t) => {
                             vad_tensor = t;
@@ -824,7 +851,11 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
                         .for_each(|sample| { producer2.push(sample).unwrap_or(()); });
                     },
                     Err(e) => {
-                        handle_errors(Err(e));
+                        // don't spam errors if there's already one known
+                        if !cancel_token1.load(std::sync::atomic::Ordering::Relaxed) {
+                            handle_errors(Err(e));
+                        }
+                        cancel_token1.store(true, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
                 let chunk_end_time = std::time::Instant::now();
@@ -839,9 +870,6 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
             }
             });
             
-            let arc_cancel_token = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let cancel_token1 = arc_cancel_token.clone();
-            let cancel_token2 = arc_cancel_token.clone();
 
             std::thread::spawn(move || {
                 loop {
@@ -856,7 +884,7 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
                             }
                         });
                     }
-                    if cancel_token1.load(std::sync::atomic::Ordering::Relaxed) {
+                    if cancel_token3.load(std::sync::atomic::Ordering::Relaxed) {
                         break;
                     }
                     std::thread::sleep(core::time::Duration::from_millis(50));
@@ -884,7 +912,13 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
             let output_stream = d.build_output_stream(&output_config, output_data_fn, audio::err_fn).map_err(|e| AppError::BuildOutputStreamError(e))?;
             output_stream.play().map_err(|e| AppError::PlayStreamError("output", e))?;
             //add a couple seconds in case we fall behind
-            std::thread::sleep(core::time::Duration::from_secs_f32(playback_secs + 2.0));
+            let stop_time = std::time::Instant::now() + core::time::Duration::from_secs_f32(playback_secs + 2.0);
+            loop {
+                if cancel_token2.load(std::sync::atomic::Ordering::Relaxed) || std::time::Instant::now() > stop_time {
+                    break;
+                }
+                std::thread::sleep(core::time::Duration::from_millis(50));
+            }
             cancel_token2.store(true, std::sync::atomic::Ordering::Relaxed);
         }
         DeviceType::None => {
