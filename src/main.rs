@@ -10,6 +10,7 @@ use ringbuf::RingBuffer;
 use native_dialog::{FileDialog, MessageDialog};
 use thiserror::Error;
 use log::{info, trace, warn, error};
+use rubato::{FftFixedInOut, Resampler};
 
 mod view;
 mod audio;
@@ -51,6 +52,10 @@ pub enum AppError {
     ModelError(#[from] tch::TchError),
     #[error("File picker dialog failed to open for path:\n{0}")]
     FileDialogError(PathBuf),
+    #[error("Resampler construction failed:\n{0}")]
+    ResamplerConstructionError(#[from] rubato::ResamplerConstructionError),
+    #[error("Resampling failed:\n{0}")]
+    ResampleError(#[from] rubato::ResampleError)
 }
 
 const ICON: &[u8; 262144] = include_bytes!("../assets/icon.data");
@@ -699,8 +704,6 @@ async fn play_source(source: Vec<f32>, output_device: audio::DeviceType) -> Resu
     audio::play_audio_buf(output_device, source, unsafe { OUTPUT_VOLUME })
 }
 
-// FIXME something in this function is failing on small inputs
-// FIXME also something (probably vad) is spamming inference failed but the output seems fine
 /// Convert and play back the input buffer with the target voice
 async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc::Acoustic, hifigan: softvc::Hifigan, vad: vad::Vad, output_device: audio::DeviceType) -> Result<(), AppError> {
     //TODO some kind of loading spinner or something while this is happening
@@ -753,10 +756,28 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
             writer.finalize().map_err(|e| AppError::HoundError(e))?;
         },
         DeviceType::Device(ref d) => {
-            let ring: RingBuffer<f32> = RingBuffer::new(OFFLINE_RINGBUFFER_SIZE);
-            let (mut producer, mut consumer) = ring.split();
-
             let playback_secs = source.len() as f32 / 16000.0;
+
+            let output_config = d.default_output_config().map_err(|_e| AppError::BuildOutputStreamError(cpal::BuildStreamError::StreamConfigNotSupported))?.config();
+            let out_rate = output_config.sample_rate.0 as usize;
+            let n_channels = output_config.channels as usize;
+            let mut resampler = FftFixedInOut::<f32>::new(MODEL_SAMPLE_RATE, out_rate, OFFLINE_CHUNK_SIZE, 1).map_err(|e| AppError::ResamplerConstructionError(e))?;
+            let mut resampler_input_buffer = resampler.input_buffer_allocate();
+            let mut resampler_output_buffer = resampler.output_buffer_allocate();
+            let resampler_input_size = resampler.input_frames_next();
+            let resampler_output_size = resampler.output_frames_next();
+            info!("n_channels: {}", n_channels);
+            info!("out_rate: {}", out_rate);
+            info!("resampler_input_size: {}", resampler_input_size);
+            info!("resampler_output_size: {}", resampler_output_size);
+
+            resampler_input_buffer[0].resize(resampler_input_size, 0.0);
+
+            let output_chunk_size = out_rate * OFFLINE_CHUNK_SECS * n_channels;
+            let ring: RingBuffer<f32> = RingBuffer::new(output_chunk_size*2);
+            let (mut producer, mut consumer) = ring.split();
+            let ring2: RingBuffer<f32> = RingBuffer::new(OFFLINE_CHUNK_SIZE*2);
+            let (mut producer2, mut consumer2) = ring2.split();
 
             std::thread::spawn(move || {
             for chunk in source.chunks(OFFLINE_CHUNK_SIZE)
@@ -780,10 +801,9 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
                     vad_confidence.push(vad_tensor.double_value(&[0]) as f32)
                 });
 
-                let mut softvc_input = Vec::new();
-                softvc_input.extend_from_slice(chunk);
 
-                let softvc_out = softvc::inference(&softvc_input, hubert.clone(), acoustic.clone(), hifigan.clone());
+
+                let softvc_out = softvc::inference(&chunk, hubert.clone(), acoustic.clone(), hifigan.clone());
                 match softvc_out {
                     Ok(samples) => {
                         samples.iter()
@@ -798,22 +818,39 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
                             }
                             sa
                         })
-                        .map(|f| std::iter::repeat(f).take(6)) // upsample to 48khz stereo
-                        .flatten()
-                        .for_each(|sample| { producer.push(sample).unwrap_or(()); })
+                        .for_each(|sample| { producer2.push(sample).unwrap_or(()); });
                     },
                     Err(e) => {
                         handle_errors(Err(e));
                     }
                 }
-                std::thread::sleep(core::time::Duration::from_secs_f32(OFFLINE_CHUNK_SECS as f32 - 0.5));
+
+                std::thread::sleep(core::time::Duration::from_secs_f32(OFFLINE_CHUNK_SECS as f32 - 2.0));
             }
             });
             
-            let output_config = cpal::StreamConfig { channels: OUTPUT_CHANNELS as u16, sample_rate: SampleRate(OUTPUT_SAMPLE_RATE as u32), buffer_size: BufferSize::Default };
+
+            std::thread::spawn(move || {
+                //FIXME infinite loop
+                loop {
+                if consumer2.len() >= resampler_input_size {
+                    // resample
+                    consumer2.pop_slice(&mut resampler_input_buffer[0][..resampler_input_size]);
+                    resampler.process_into_buffer(&resampler_input_buffer, &mut resampler_output_buffer, None);
+                    resampler_output_buffer[0].iter().for_each(|&sample| {
+                        // mono to stereo etc.
+                        for _ in 0..n_channels {
+                            producer.push(sample).unwrap_or(()); 
+                        }
+                    });
+                    std::thread::sleep(core::time::Duration::from_secs_f32(1.0));
+                }
+                }
+            });
 
             let output_data_fn = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                if consumer.len() >= OFFLINE_RINGBUFFER_SIZE / 2 {
+                info!("consumer_len: {}", consumer.len());
+                if consumer.len() >= data.len() {
                     for sample in data.iter_mut() {
                         match consumer.pop() {
                             Some(s) => {
@@ -823,10 +860,8 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
                         }
                     }
                 }
-                else if consumer.len() >= data.len() {
-                    consumer.pop_slice(data);
-                }
-                else if consumer.len() <= data.len() {
+                else if consumer.len() > 0 && consumer.len() < data.len() {
+                    //FIXME volume
                     consumer.pop_slice(&mut data[..consumer.len()]);
                     data[consumer.len()..].fill(0.0);
                 }

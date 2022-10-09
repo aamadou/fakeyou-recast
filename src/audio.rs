@@ -2,6 +2,8 @@ use std::{fs::File, path::PathBuf};
 use cpal::{self, SampleRate, BufferSize, traits::{DeviceTrait, HostTrait, StreamTrait}};
 use crate::AppError;
 use log::{info, error};
+use rubato::{FftFixedInOut, Resampler};
+use crate::consts::*;
 
 pub fn get_input_device_list() -> Vec<String> {
     let input_devices = cpal::default_host().input_devices();
@@ -112,20 +114,45 @@ pub fn play_audio_buf(output_device: DeviceType, buf: Vec<f32>, volume: f32) -> 
         },
         DeviceType::Device(d) =>
         {
-            let output_config = cpal::StreamConfig { channels: 2, sample_rate: SampleRate(48000), buffer_size: BufferSize::Default };
+            let output_config = d.default_output_config().map_err(|_e| AppError::BuildOutputStreamError(cpal::BuildStreamError::StreamConfigNotSupported))?.config();
             let playback_secs = buf.len() as f32 / 16000.0;
+
+            // Resample
+            let out_rate = output_config.sample_rate.0 as usize;
+            let mut resampler = FftFixedInOut::<f32>::new(MODEL_SAMPLE_RATE, out_rate, CHUNK_SIZE, 1).map_err(|e| AppError::ResamplerConstructionError(e))?;
+            let mut resampler_input_buffer = resampler.input_buffer_allocate();
+            let mut resampler_output_buffer = resampler.input_buffer_allocate();
+
+            let mut output_vec = Vec::new();
+            let play_vec = buf.to_vec();
+            let mut play_vec_iter = play_vec.iter();
+            let mut chunk: Vec<f32> = play_vec_iter.by_ref().take(resampler.input_frames_next()).cloned().collect();
+            while chunk.len() > 0 {
+                resampler_input_buffer.clear();
+                resampler_input_buffer.push(chunk);
+                resampler.process_into_buffer(&resampler_input_buffer, &mut resampler_output_buffer, None)?;
+                output_vec.extend_from_slice(&resampler_output_buffer[0]);
+                let desired_size = resampler.input_frames_next();
+                chunk = play_vec_iter.by_ref().map(|r| *r).take(desired_size).collect();
+                if chunk.len() < desired_size && chunk.len() > 0 {
+                    chunk.resize(desired_size, 0.0);
+                }
+            }
 
             let mut i = 0;
             let output_data_fn = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                 for (j, sample) in data.iter_mut().enumerate() {
-                    let s = buf[i];
+                    let s = output_vec[i];
                     *sample = apply_volume(s, volume);
-                    // Expand one sample to 6 to convert 16khz mono to 48khz stereo
-                    if j%6 == 5 && i < buf.len() - 1
+                    let n_channels = output_config.channels;
+                    // Expand one sample to n_channels samples
+                    // ie mono to stereo
+                    if j%(n_channels as usize) == 0 && i < output_vec.len() - 1
                     {
                         i += 1;
                     }
                 }
+
             };
 
             let output_stream = d.build_output_stream(&output_config, output_data_fn, err_fn).map_err(|e| AppError::BuildOutputStreamError(e))?;
@@ -156,13 +183,45 @@ pub fn record_audio_vec(input_device: DeviceType, receiver: std::sync::mpsc::Rec
         DeviceType::File((f, _)) => {
             let mut reader = hound::WavReader::new(f).map_err(|e| AppError::HoundError(e))?;
             let record_vec: Result<Vec<f32>, AppError> = reader.samples::<f32>().map(|s| s.map_err(|e| AppError::HoundError(e))).collect();
+            let mut output_vec: Vec<f32> = Vec::new();
+
+            // Resample
+            let in_rate = reader.spec().sample_rate as usize;
+            let mut resampler = FftFixedInOut::<f32>::new(in_rate, MODEL_SAMPLE_RATE, CHUNK_SIZE, 1).map_err(|e| AppError::ResamplerConstructionError(e))?;
+            let mut resampler_input_buffer = resampler.input_buffer_allocate();
+            let mut resampler_output_buffer = resampler.input_buffer_allocate();
+
+            let record_vec = record_vec?;
+            let mut record_vec_iter = record_vec.iter();
+            let mut chunk: Vec<f32> = record_vec_iter.by_ref().take(resampler.input_frames_next()).cloned().collect();
+            while chunk.len() > 0 {
+                resampler_input_buffer.clear();
+                resampler_input_buffer.push(chunk);
+                resampler.process_into_buffer(&resampler_input_buffer, &mut resampler_output_buffer, None)?;
+                
+                // mix stereo (or more channels) to mono
+                for channel in resampler_output_buffer[0].chunks(reader.spec().channels as usize) {
+                    let mut mixed: f32 = 0.0;
+                    for i in 0..channel.len() {
+                        mixed += channel[i]; 
+                    }
+                    output_vec.push(mixed);
+                }
+
+                // prepare for next iteration
+                let desired_size = resampler.input_frames_next();
+                chunk = record_vec_iter.by_ref().map(|r| *r).take(desired_size).collect();
+                if chunk.len() < desired_size && chunk.len() > 0 {
+                    chunk.resize(desired_size, 0.0);
+                }
+            }
+
             info!("Recording stopped");
-            record_vec
+            Ok(output_vec)
         },
         DeviceType::Device(d) =>
         {
-
-            let input_config = cpal::StreamConfig { channels: 1, sample_rate: SampleRate(48000), buffer_size: BufferSize::Default};
+            let input_config = d.default_input_config().map_err(|_e| AppError::BuildInputStreamError(cpal::BuildStreamError::StreamConfigNotSupported))?.config();
             let record_vec: Vec<f32> = Vec::new();
 
             use std::sync::{Arc, Mutex, atomic::{AtomicU32, Ordering}};
@@ -185,11 +244,8 @@ pub fn record_audio_vec(input_device: DeviceType, receiver: std::sync::mpsc::Rec
                     let lock = maybe_lock.unwrap();
                     let mut record_vec = lock;
                     let input_vol = f32::from_bits(atomic_vol1.load(Ordering::Relaxed));
-                    for (j, &sample) in data.iter().enumerate() {
-                        // Drop 2/3 of the samples to make 16KHz
-                        if j % 3 == 0 {
-                            record_vec.push(apply_volume(sample,  input_vol));
-                        }
+                    for &sample in data.iter() {
+                        record_vec.push(apply_volume(sample, input_vol));
                     }
                 }
 
@@ -212,7 +268,35 @@ pub fn record_audio_vec(input_device: DeviceType, receiver: std::sync::mpsc::Rec
             let lock = arc2.try_lock().map_err(|_e| AppError::LockError)?;
             let record_vec = lock;
 
-            Ok(record_vec.to_owned())
+            // Resample
+            let in_rate = input_config.sample_rate.0 as usize;
+            let mut resampler = FftFixedInOut::<f32>::new(in_rate, MODEL_SAMPLE_RATE, CHUNK_SIZE, 1).map_err(|e| AppError::ResamplerConstructionError(e))?;
+            let mut resampler_input_buffer = resampler.input_buffer_allocate();
+            let mut resampler_output_buffer = resampler.input_buffer_allocate();
+
+            let mut output_vec = Vec::new();
+            let mut record_vec_iter = record_vec.iter();
+            let mut chunk: Vec<f32> = record_vec_iter.by_ref().take(resampler.input_frames_next()).cloned().collect();
+            while chunk.len() > 0 {
+                resampler_input_buffer.clear();
+                resampler_input_buffer.push(chunk);
+                resampler.process_into_buffer(&resampler_input_buffer, &mut resampler_output_buffer, None)?;
+                // mix stereo (or more channels) to mono
+                for channel in resampler_output_buffer[0].chunks(input_config.channels as usize) {
+                    let mut mixed: f32 = 0.0;
+                    for i in 0..channel.len() {
+                        mixed += channel[i]; 
+                    }
+                    output_vec.push(mixed);
+                }
+                // prepare for next iteration
+                let desired_size = resampler.input_frames_next();
+                chunk = record_vec_iter.by_ref().map(|r| *r).take(desired_size).collect();
+                if chunk.len() < desired_size && chunk.len() > 0 {
+                    chunk.resize(desired_size, 0.0);
+                }
+            }
+            Ok(output_vec)
         },
         DeviceType::None => {
             Err(AppError::NoDevice("input"))
