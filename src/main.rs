@@ -766,23 +766,23 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
             let mut resampler_output_buffer = resampler.output_buffer_allocate();
             let resampler_input_size = resampler.input_frames_next();
             let resampler_output_size = resampler.output_frames_next();
-            info!("n_channels: {}", n_channels);
-            info!("out_rate: {}", out_rate);
-            info!("resampler_input_size: {}", resampler_input_size);
-            info!("resampler_output_size: {}", resampler_output_size);
+            trace!("n_channels: {}", n_channels);
+            trace!("out_rate: {}", out_rate);
+            trace!("resampler_input_size: {}", resampler_input_size);
+            trace!("resampler_output_size: {}", resampler_output_size);
 
             resampler_input_buffer[0].resize(resampler_input_size, 0.0);
 
-            let output_chunk_size = out_rate * OFFLINE_CHUNK_SECS * n_channels;
+            let output_chunk_size = out_rate * resampler_input_size / MODEL_SAMPLE_RATE * n_channels;
             let ring: RingBuffer<f32> = RingBuffer::new(output_chunk_size*2);
             let (mut producer, mut consumer) = ring.split();
-            let ring2: RingBuffer<f32> = RingBuffer::new(OFFLINE_CHUNK_SIZE*2);
+            let ring2: RingBuffer<f32> = RingBuffer::new(resampler_input_size*2);
             let (mut producer2, mut consumer2) = ring2.split();
 
             std::thread::spawn(move || {
-            for chunk in source.chunks(OFFLINE_CHUNK_SIZE)
+            for chunk in source.chunks(resampler_input_size)
             {
-            
+                let chunk_start_time = std::time::Instant::now(); 
                 // Find active 50ms chunks with Silero VAD
                 let mut vad_confidence: Vec<f32> = Vec::new();
                 chunk.chunks(VAD_SIZE).for_each(|vad_chunk| {
@@ -801,16 +801,19 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
                     vad_confidence.push(vad_tensor.double_value(&[0]) as f32)
                 });
 
-
-
                 let softvc_out = softvc::inference(&chunk, hubert.clone(), acoustic.clone(), hifigan.clone());
                 match softvc_out {
-                    Ok(samples) => {
+                    Ok(mut samples) => {
+                        // pad for the last chunk so we don't chop off the end of the audio
+                        if samples.len() < resampler_input_size {
+                            samples.resize(resampler_input_size, 0.0);
+                        }
                         samples.iter()
                         .enumerate()
                         .map(|(e, sample)| {
                             let mut sa = 0.0;
-                            for i in 0..OFFLINE_CHUNK_SIZE/VAD_SIZE {
+                            for i in 0..resampler_input_size/VAD_SIZE {
+                                if i == vad_confidence.len() { break; }
                                 if e < (i+1)*VAD_SIZE && e > i*VAD_SIZE && vad_confidence[i] > SPEAKER_THRESHOLD {
                                     sa = *sample;
                                     break;
@@ -824,32 +827,43 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
                         handle_errors(Err(e));
                     }
                 }
+                let chunk_end_time = std::time::Instant::now();
 
-                std::thread::sleep(core::time::Duration::from_secs_f32(OFFLINE_CHUNK_SECS as f32 - 2.0));
+                let chunk_time = chunk_end_time - chunk_start_time;
+
+                // sleep to prevent ringbuffer overflows
+                let sleep_time_secs = resampler_input_size as f32 / MODEL_SAMPLE_RATE as f32 - chunk_time.as_secs_f32() - 0.2;
+                if sleep_time_secs > 0.0 {
+                    std::thread::sleep(core::time::Duration::from_secs_f32(sleep_time_secs));
+                }
             }
             });
             
+            let arc_cancel_token = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let cancel_token1 = arc_cancel_token.clone();
+            let cancel_token2 = arc_cancel_token.clone();
 
             std::thread::spawn(move || {
-                //FIXME infinite loop
                 loop {
-                if consumer2.len() >= resampler_input_size {
-                    // resample
-                    consumer2.pop_slice(&mut resampler_input_buffer[0][..resampler_input_size]);
-                    resampler.process_into_buffer(&resampler_input_buffer, &mut resampler_output_buffer, None);
-                    resampler_output_buffer[0].iter().for_each(|&sample| {
-                        // mono to stereo etc.
-                        for _ in 0..n_channels {
-                            producer.push(sample).unwrap_or(()); 
-                        }
-                    });
-                    std::thread::sleep(core::time::Duration::from_secs_f32(1.0));
-                }
+                    if consumer2.len() >= resampler_input_size {
+                        // resample
+                        consumer2.pop_slice(&mut resampler_input_buffer[0][..resampler_input_size]);
+                        resampler.process_into_buffer(&resampler_input_buffer, &mut resampler_output_buffer, None);
+                        resampler_output_buffer[0].iter().for_each(|&sample| {
+                            // mono to stereo etc.
+                            for _ in 0..n_channels {
+                                producer.push(sample).unwrap_or(()); 
+                            }
+                        });
+                    }
+                    if cancel_token1.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
+                    std::thread::sleep(core::time::Duration::from_millis(50));
                 }
             });
 
             let output_data_fn = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                info!("consumer_len: {}", consumer.len());
                 if consumer.len() >= data.len() {
                     for sample in data.iter_mut() {
                         match consumer.pop() {
@@ -869,8 +883,9 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
 
             let output_stream = d.build_output_stream(&output_config, output_data_fn, audio::err_fn).map_err(|e| AppError::BuildOutputStreamError(e))?;
             output_stream.play().map_err(|e| AppError::PlayStreamError("output", e))?;
-            //add a second in case we fall behind
-            std::thread::sleep(core::time::Duration::from_secs_f32(playback_secs + 1.0));
+            //add a couple seconds in case we fall behind
+            std::thread::sleep(core::time::Duration::from_secs_f32(playback_secs + 2.0));
+            cancel_token2.store(true, std::sync::atomic::Ordering::Relaxed);
         }
         DeviceType::None => {
             Err(AppError::NoDevice("output"))?

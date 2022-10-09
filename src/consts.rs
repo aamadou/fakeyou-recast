@@ -1,8 +1,5 @@
 pub const MODEL_SAMPLE_RATE: usize = 16000;
-pub const OUTPUT_SAMPLE_RATE: usize = 48000;
-pub const OUTPUT_CHANNELS: usize = 2;
-pub const OFFLINE_CHUNK_SECS: usize = 4;
-pub const OFFLINE_CHUNK_SIZE: usize = MODEL_SAMPLE_RATE * OFFLINE_CHUNK_SECS;
+pub const OFFLINE_CHUNK_SIZE: usize = 6*MODEL_SAMPLE_RATE;
 //pub const OFFLINE_RINGBUFFER_SIZE: usize = OUTPUT_SAMPLE_RATE * OFFLINE_CHUNK_SECS * OUTPUT_CHANNELS * 2;
 pub const CHUNK_SIZE: usize = 19200; // 400ms at 48KHz
 pub const TENSOR_SIZE: usize = 32000; // 2 seconds at 16KHz
