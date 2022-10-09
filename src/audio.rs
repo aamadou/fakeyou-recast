@@ -95,8 +95,7 @@ pub fn apply_volume(sample: f32, volume: f32) -> f32 {
     sample * scale
 }
 
-//FIXME maybe this should be more parameterizable and support resampling?
-/// Play a 16KHz mono audio buffer on a 48KHz stereo target, applying the chosen volume
+/// Play a 16KHz mono audio buffer on a given sample rate/channels target, applying the chosen volume
 pub fn play_audio_buf(output_device: DeviceType, buf: Vec<f32>, volume: f32) -> Result<(), AppError> {
     match output_device {
         DeviceType::File((f, _)) => {
@@ -170,13 +169,9 @@ pub fn play_audio_buf(output_device: DeviceType, buf: Vec<f32>, volume: f32) -> 
 //allow volume to be adjustable during recording, find a better solution for this later
 //do we even need volume to be adjustable during recording?
 //
-//Also we might want another version of this for stereo sources, virtual inputs are often stereo
-//Figure out how to mix stereo down to mono when this is done, dropping half of it (ie using only
-//one channel with no mixing) would sound terrible
-//
 //Another idea: maybe allow passing in a fixed-size buffer for the consumer to receive samples in 
 //rather than returning a vec
-///Record from a 48khz mono audio buffer into a 16khz mono format
+///Record from a given format into a 16khz mono format
 pub fn record_audio_vec(input_device: DeviceType, receiver: std::sync::mpsc::Receiver<(bool, f32)>) -> Result<Vec<f32>, AppError>
 {
     match input_device {
@@ -196,6 +191,10 @@ pub fn record_audio_vec(input_device: DeviceType, receiver: std::sync::mpsc::Rec
             let mut chunk: Vec<f32> = record_vec_iter.by_ref().take(resampler.input_frames_next()).cloned().collect();
             while chunk.len() > 0 {
                 resampler_input_buffer.clear();
+                let desired_size = resampler.input_frames_next();
+                if chunk.len() < desired_size && chunk.len() > 0 {
+                    chunk.resize(desired_size, 0.0);
+                }
                 resampler_input_buffer.push(chunk);
                 resampler.process_into_buffer(&resampler_input_buffer, &mut resampler_output_buffer, None)?;
                 
@@ -209,11 +208,7 @@ pub fn record_audio_vec(input_device: DeviceType, receiver: std::sync::mpsc::Rec
                 }
 
                 // prepare for next iteration
-                let desired_size = resampler.input_frames_next();
                 chunk = record_vec_iter.by_ref().map(|r| *r).take(desired_size).collect();
-                if chunk.len() < desired_size && chunk.len() > 0 {
-                    chunk.resize(desired_size, 0.0);
-                }
             }
 
             info!("Recording stopped");
@@ -279,6 +274,10 @@ pub fn record_audio_vec(input_device: DeviceType, receiver: std::sync::mpsc::Rec
             let mut chunk: Vec<f32> = record_vec_iter.by_ref().take(resampler.input_frames_next()).cloned().collect();
             while chunk.len() > 0 {
                 resampler_input_buffer.clear();
+                let desired_size = resampler.input_frames_next();
+                if chunk.len() < desired_size && chunk.len() > 0 {
+                    chunk.resize(desired_size, 0.0);
+                }
                 resampler_input_buffer.push(chunk);
                 resampler.process_into_buffer(&resampler_input_buffer, &mut resampler_output_buffer, None)?;
                 // mix stereo (or more channels) to mono
@@ -290,11 +289,7 @@ pub fn record_audio_vec(input_device: DeviceType, receiver: std::sync::mpsc::Rec
                     output_vec.push(mixed);
                 }
                 // prepare for next iteration
-                let desired_size = resampler.input_frames_next();
                 chunk = record_vec_iter.by_ref().map(|r| *r).take(desired_size).collect();
-                if chunk.len() < desired_size && chunk.len() > 0 {
-                    chunk.resize(desired_size, 0.0);
-                }
             }
             Ok(output_vec)
         },
