@@ -112,10 +112,7 @@ static mut INPUT_VOLUME: f32 = 80.0;
 static mut OUTPUT_VOLUME: f32 = 80.0;
 
 static mut SOFTVC_INPUT: [f32; TENSOR_SIZE] = [0.0f32; TENSOR_SIZE];
-static mut INPUT_CHUNK: [f32; CHUNK_SIZE] = [0.0f32; CHUNK_SIZE];
 static mut VAD_CHUNK: [f32; VAD_SIZE] = [0.0f32; VAD_SIZE];
-static mut VAD_CONFIDENCE: [f32; CHUNK_SIZE_16K/VAD_SIZE] = [0.0; CHUNK_SIZE_16K/VAD_SIZE];
-
 
 struct App {
     hubert: softvc::Hubert,
@@ -547,11 +544,11 @@ impl Application for App {
 async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32, f32)>, input_device: audio::DeviceType, output_device: audio::DeviceType, hubert: softvc::Hubert, acoustic: softvc::Acoustic, hifigan: softvc::Hifigan, vad: vad::Vad) -> Result<(), AppError>
 {
     info!("Started realtime recording from {} with playback on {}", input_device, output_device);
-    //let input_config = cpal::StreamConfig { channels: 1, sample_rate: SampleRate(48000), buffer_size: BufferSize::Fixed(IN_BUFFER_SIZE as u32) };
-    //let output_config = cpal::StreamConfig { channels: 2, sample_rate: SampleRate(48000), buffer_size: BufferSize::Fixed(OUT_BUFFER_SIZE as u32) };
     let arc_cancel_token = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let cancel_token1 = arc_cancel_token.clone();
     let cancel_token2 = arc_cancel_token.clone();
+    let cancel_token3 = arc_cancel_token.clone();
+    let cancel_token4 = arc_cancel_token.clone();
 
     let mut cpal_input_device = None;
     match input_device {
@@ -609,12 +606,12 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
     trace!("resampler2_output_size: {}", resampler2_output_size);
     resampler2_input_buffer[0].resize(resampler2_input_size, 0.0);
 
-    let output_chunk_size = out_rate * resampler2_input_size / MODEL_SAMPLE_RATE * out_n_channels;
+    let output_chunk_size = resampler2_output_size * out_n_channels;
     let ring1: RingBuffer<f32> = RingBuffer::new(resampler1_input_size*2);
     let (mut producer1, mut consumer1) = ring1.split();
     let ring2: RingBuffer<f32> = RingBuffer::new(output_chunk_size*2);
     let (mut producer2, mut consumer2) = ring2.split();
-    let ring3: RingBuffer<f32> = RingBuffer::new(resampler2_input_size*2);
+    let ring3: RingBuffer<f32> = RingBuffer::new(resampler2_input_size*out_n_channels*2);
     let (mut producer3, mut consumer3) = ring3.split();
 
     let input_data_fn = move |data: &cpal::Data, _: &cpal::InputCallbackInfo| {
@@ -646,8 +643,9 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
             }
 
             // Find active 50ms chunks with Silero VAD
+            let mut vad_confidence = vec![0.0; resampler1_output_size / VAD_SIZE];
             let mut v = 0;
-            unsafe { &SOFTVC_INPUT[..CHUNK_SIZE_16K] }.chunks(VAD_SIZE).for_each(|chunk| {
+            unsafe { &SOFTVC_INPUT[..resampler1_output_size] }.chunks(VAD_SIZE).for_each(|chunk| {
                 unsafe { VAD_CHUNK.copy_from_slice(chunk)};
                 let vad_res = vad.forward(unsafe { &VAD_CHUNK});
                 let mut vad_tensor = tch::Tensor::of_slice(&[0.0]);
@@ -663,13 +661,13 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
                         vad_tensor = t;
                     }
                 }
-                unsafe { VAD_CONFIDENCE[v] = vad_tensor.double_value(&[0]) as f32; }
+                vad_confidence[v] = vad_tensor.double_value(&[0]) as f32;
                 v += 1;
             });
             
             // Dupe SOFTVC_INPUT until it is TENSOR_SIZE long
-            for k in 1..(TENSOR_SIZE/CHUNK_SIZE_16K) {
-                unsafe { SOFTVC_INPUT.copy_within(0..CHUNK_SIZE_16K, CHUNK_SIZE_16K*k)};
+            for k in 1..(TENSOR_SIZE/resampler1_output_size) {
+                unsafe { SOFTVC_INPUT.copy_within(0..resampler1_output_size, resampler1_output_size*k)};
             }
             let res = softvc::inference(unsafe { &SOFTVC_INPUT }, hubert.clone(), acoustic.clone(), hifigan.clone());
             match res {
@@ -685,8 +683,8 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
                         .enumerate()
                         .map(|(e, sample)| {
                             let mut sa = 0.0;
-                            for i in 0..CHUNK_SIZE_16K/VAD_SIZE {
-                                if e < (i+1)*VAD_SIZE && e > i*VAD_SIZE &&  unsafe { VAD_CONFIDENCE[i] } > SPEAKER_THRESHOLD {
+                            for i in 0..resampler1_output_size/VAD_SIZE {
+                                if e < (i+1)*VAD_SIZE && e > i*VAD_SIZE &&  vad_confidence[i] > SPEAKER_THRESHOLD {
                                     sa = *sample;
                                     break;
                                 }
@@ -713,7 +711,9 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
 
 
     std::thread::spawn(move || {
+        println!("input size: {}", resampler2_input_size);
     loop {
+        println!("{}", consumer3.len());
         if consumer3.len() >= resampler2_input_size {
             // resample
             consumer3.pop_slice(&mut resampler2_input_buffer[0][..resampler2_input_size]);
@@ -725,10 +725,12 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
                 }
             });
         }
-        /*if cancel_token3.load(std::sync::atomic::Ordering::Relaxed) {
+        if cancel_token3.load(std::sync::atomic::Ordering::Relaxed) {
             break;
-        }*/
-        std::thread::sleep(core::time::Duration::from_millis(50));
+        }
+        // FIXME Kind of a hack
+        let sleep_time_secs = resampler2_input_size as f32 / MODEL_SAMPLE_RATE as f32 * 0.85;
+        std::thread::sleep(core::time::Duration::from_secs_f32(sleep_time_secs));
     }
     });
 
@@ -754,6 +756,7 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
             break;
         }
     }
+    cancel_token4.store(true, std::sync::atomic::Ordering::Relaxed);
     Ok(())
 }
 
@@ -912,7 +915,7 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
                 let chunk_time = chunk_end_time - chunk_start_time;
 
                 // sleep to prevent ringbuffer overflows
-                let sleep_time_secs = resampler_input_size as f32 / MODEL_SAMPLE_RATE as f32 - chunk_time.as_secs_f32() - 0.2;
+                let sleep_time_secs = resampler_input_size as f32 / MODEL_SAMPLE_RATE as f32 - chunk_time.as_secs_f32() - 0.1;
                 if sleep_time_secs > 0.0 {
                     std::thread::sleep(core::time::Duration::from_secs_f32(sleep_time_secs));
                 }
