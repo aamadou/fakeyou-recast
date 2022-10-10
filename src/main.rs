@@ -547,43 +547,101 @@ impl Application for App {
 async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32, f32)>, input_device: audio::DeviceType, output_device: audio::DeviceType, hubert: softvc::Hubert, acoustic: softvc::Acoustic, hifigan: softvc::Hifigan, vad: vad::Vad) -> Result<(), AppError>
 {
     info!("Started realtime recording from {} with playback on {}", input_device, output_device);
-    let input_config = cpal::StreamConfig { channels: 1, sample_rate: SampleRate(48000), buffer_size: BufferSize::Fixed(IN_BUFFER_SIZE as u32) };
-    let output_config = cpal::StreamConfig { channels: 2, sample_rate: SampleRate(48000), buffer_size: BufferSize::Fixed(OUT_BUFFER_SIZE as u32) };
-    let ring1: RingBuffer<f32> = RingBuffer::new(RINGBUFFER1_SIZE);
-    let (mut producer1, mut consumer1) = ring1.split();
-    let ring2: RingBuffer<f32> = RingBuffer::new(RINGBUFFER2_SIZE);
-    let (mut producer2, mut consumer2) = ring2.split();
-
+    //let input_config = cpal::StreamConfig { channels: 1, sample_rate: SampleRate(48000), buffer_size: BufferSize::Fixed(IN_BUFFER_SIZE as u32) };
+    //let output_config = cpal::StreamConfig { channels: 2, sample_rate: SampleRate(48000), buffer_size: BufferSize::Fixed(OUT_BUFFER_SIZE as u32) };
     let arc_cancel_token = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let cancel_token1 = arc_cancel_token.clone();
     let cancel_token2 = arc_cancel_token.clone();
 
-    let mut q = 0;
+    let mut cpal_input_device = None;
+    match input_device {
+        DeviceType::File(_f) => {
+            MessageDialog::new().set_type(native_dialog::MessageType::Error).set_title("FakeYou Recast Error").set_text("Cannot use files for realtime.").show_alert().unwrap();
+        },
+        DeviceType::Device(cpal_dev) => {
+            cpal_input_device = Some(cpal_dev);
+        }
+        DeviceType::None => { Err(AppError::NoDevice("input"))?; }
+    }
+
+    let mut cpal_output_device = None;
+    match output_device {
+        DeviceType::File(_f) => {
+            MessageDialog::new().set_type(native_dialog::MessageType::Error).set_title("FakeYou Recast Error").set_text("Cannot use files for realtime.").show_alert().unwrap();
+        },
+        DeviceType::Device(cpal_dev) => {
+            cpal_output_device = Some(cpal_dev);
+        }
+        DeviceType::None => { Err(AppError::NoDevice("output"))?; }
+    }
+
+    let mut input_config = cpal_input_device.as_ref().ok_or(AppError::NoDevice("input"))?.default_input_config().map_err(|_e| AppError::NoDevice("input"))?.config();
+    let mut output_config = cpal_output_device.as_ref().ok_or(AppError::NoDevice("output"))?.default_output_config().map_err(|_e| AppError::NoDevice("output"))?.config();
+
+    input_config.buffer_size = BufferSize::Fixed(IN_BUFFER_SIZE as u32);
+    output_config.buffer_size = BufferSize::Fixed(OUT_BUFFER_SIZE as u32);
+
+    let in_rate = input_config.sample_rate.0 as usize;
+    let in_n_channels = input_config.channels as usize;
+    
+    let out_rate = output_config.sample_rate.0 as usize;
+    let out_n_channels = output_config.channels as usize;
+
+    let mut resampler1 = FftFixedInOut::<f32>::new(in_rate, MODEL_SAMPLE_RATE, CHUNK_SIZE, 1).map_err(|e| AppError::ResamplerConstructionError(e))?;
+    let mut resampler1_input_buffer = resampler1.input_buffer_allocate();
+    let mut resampler1_output_buffer = resampler1.output_buffer_allocate();
+    let resampler1_input_size = resampler1.input_frames_next();
+    let resampler1_output_size = resampler1.output_frames_next();
+    trace!("in_n_channels: {}", in_n_channels);
+    trace!("in_rate: {}", in_rate);
+    trace!("resampler1_input_size: {}", resampler1_input_size);
+    trace!("resampler1_output_size: {}", resampler1_output_size);
+    resampler1_input_buffer[0].resize(resampler1_input_size, 0.0);
+
+    let mut resampler2 = FftFixedInOut::<f32>::new(MODEL_SAMPLE_RATE, out_rate, CHUNK_SIZE_16K, 1).map_err(|e| AppError::ResamplerConstructionError(e))?;
+    let mut resampler2_input_buffer = resampler2.input_buffer_allocate();
+    let mut resampler2_output_buffer = resampler2.output_buffer_allocate();
+    let resampler2_input_size = resampler2.input_frames_next();
+    let resampler2_output_size = resampler2.output_frames_next();
+    trace!("out_n_channels: {}", out_n_channels);
+    trace!("out_rate: {}", out_rate);
+    trace!("resampler2_input_size: {}", resampler2_input_size);
+    trace!("resampler2_output_size: {}", resampler2_output_size);
+    resampler2_input_buffer[0].resize(resampler2_input_size, 0.0);
+
+    let output_chunk_size = out_rate * resampler2_input_size / MODEL_SAMPLE_RATE * out_n_channels;
+    let ring1: RingBuffer<f32> = RingBuffer::new(resampler1_input_size*2);
+    let (mut producer1, mut consumer1) = ring1.split();
+    let ring2: RingBuffer<f32> = RingBuffer::new(output_chunk_size*2);
+    let (mut producer2, mut consumer2) = ring2.split();
+    let ring3: RingBuffer<f32> = RingBuffer::new(resampler2_input_size*2);
+    let (mut producer3, mut consumer3) = ring3.split();
 
     let input_data_fn = move |data: &cpal::Data, _: &cpal::InputCallbackInfo| {
         let data_slice: &[f32] = data.as_slice().unwrap();
         for sample in data_slice.iter() {
             let _ = producer1.push(audio::apply_volume(*sample, unsafe { INPUT_VOLUME}));
-            q += 1
-        }
-        if q == CHUNK_SIZE { 
-            q = 0;
         }
     };
 
     let mut p = 0;
     let output_data_fn = move |data: &mut cpal::Data, _: &cpal::OutputCallbackInfo| {
-        if consumer1.len() >= CHUNK_SIZE {
-            unsafe { consumer1.pop_slice(&mut INPUT_CHUNK); }
-            let mut i = 0;
+        if consumer1.len() >= resampler1_input_size {
             // downsample to 16k
-            for (j, &sample) in unsafe { INPUT_CHUNK }.iter().enumerate() {
-                if j % 3 == 0 {
-                   unsafe { SOFTVC_INPUT[i] = sample }; 
-                   i+= 1;
+            resampler1_input_buffer[0].fill(0.0);
+            consumer1.pop_slice(&mut resampler1_input_buffer[0]);
+            resampler1.process_into_buffer(&resampler1_input_buffer, &mut resampler1_output_buffer, None);
+            // mix stereo (or more channels) to mono
+            let mut j = 0;
+            for channel in resampler1_output_buffer[0].chunks(in_n_channels) {
+                let mut mixed: f32 = 0.0;
+                for i in 0..channel.len() {
+                    mixed += channel[i]; 
                 }
-                if i >= unsafe { SOFTVC_INPUT }.len() {
-                    i = 0;
+                unsafe { SOFTVC_INPUT[j] = mixed };
+                j += 1;
+                if j >= unsafe { SOFTVC_INPUT }.len() {
+                    j = 0;
                 }
             }
 
@@ -635,16 +693,13 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
                             }
                             sa
                         })
-                        .map(|f| std::iter::repeat(f).take(6)) // upsample to 48khz stereo
-                        .flatten()
-                        .take(CHUNK_SIZE*2) // trim back down to CHUNK_SIZE (2 channels)
-                        .for_each(|sample| { producer2.push(sample).unwrap_or(()); p += 1;});
+                        .for_each(|sample| { producer3.push(sample).unwrap_or(()); p += 1;});
                 }
             }
         }
 
         let data_slice: &mut [f32] = data.as_slice_mut().unwrap();
-        if consumer2.len() >= RINGBUFFER2_SIZE  / 2
+        if consumer2.len() >= output_chunk_size
         {
             // send output
             for sample in data_slice.iter_mut() {
@@ -654,42 +709,36 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
             // send silence
             data_slice.fill(0.0);
         }
-        if p == RINGBUFFER2_SIZE / 2 {
-            p = 0;
-        }
     };
 
-    let mut cpal_input_device: Option<cpal::Device> = None;
-    match input_device {
-        DeviceType::File(_f) => {
-            MessageDialog::new().set_type(native_dialog::MessageType::Error).set_title("FakeYou Recast Error").set_text("Cannot use files for realtime.").show_alert().unwrap();
-        },
-        DeviceType::Device(cpal_dev) => {
-            cpal_input_device = Some(cpal_dev);
-        }
-        DeviceType::None => { Err(AppError::NoDevice("input"))?; }
-    }
 
-    let mut cpal_output_device: Option<cpal::Device> = None;
-    match output_device {
-        DeviceType::File(_f) => {
-            MessageDialog::new().set_type(native_dialog::MessageType::Error).set_title("FakeYou Recast Error").set_text("Cannot use files for realtime.").show_alert().unwrap();
-        },
-        DeviceType::Device(cpal_dev) => {
-            cpal_output_device = Some(cpal_dev);
+    std::thread::spawn(move || {
+    loop {
+        if consumer3.len() >= resampler2_input_size {
+            // resample
+            consumer3.pop_slice(&mut resampler2_input_buffer[0][..resampler2_input_size]);
+            resampler2.process_into_buffer(&resampler2_input_buffer, &mut resampler2_output_buffer, None);
+            resampler2_output_buffer[0].iter().for_each(|&sample| {
+                // mono to stereo etc.
+                for _ in 0..out_n_channels {
+                    producer2.push(sample).unwrap_or(()); 
+                }
+            });
         }
-        DeviceType::None => { Err(AppError::NoDevice("output"))?; }
+        /*if cancel_token3.load(std::sync::atomic::Ordering::Relaxed) {
+            break;
+        }*/
+        std::thread::sleep(core::time::Duration::from_millis(50));
     }
-
+    });
 
     let input_stream = cpal_input_device.ok_or(AppError::NoDevice("input"))?.build_input_stream_raw(&input_config, SampleFormat::F32, input_data_fn, audio::err_fn).map_err(|e| AppError::BuildInputStreamError(e))?;
     let output_stream = cpal_output_device.ok_or(AppError::NoDevice("output"))?.build_output_stream_raw(&output_config, SampleFormat::F32, output_data_fn, audio::err_fn).map_err(|e| AppError::BuildOutputStreamError(e))?;
-
     input_stream.play().map_err(|e| AppError::PlayStreamError("input", e))?;
     output_stream.play().map_err(|e| AppError::PlayStreamError("output", e))?;
     loop {
         if cancel_token2.load(std::sync::atomic::Ordering::Relaxed) {
-            //FIXME set the button back to realtime instead of leaving it as stop.
+            //FIXME set the button text back to realtime instead of leaving it as stop.
             info!("Cancelled realtime recording due to an error");
             core::mem::drop(input_stream);
             core::mem::drop(output_stream);
