@@ -1,10 +1,8 @@
 #[cfg(windows)]
 fn main() {
-    if cfg!("windows") {
-        let mut res = winres::WindowsResource::new();
-        res.set_icon("assets/FakeYou_Favicon.ico");
-        res.compile().unwrap();
-    }
+    let mut res = winres::WindowsResource::new();
+    res.set_icon("assets/FakeYou_Favicon.ico");
+    res.compile().unwrap();
 }
 
 #[cfg(not(windows))]
