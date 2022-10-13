@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+// Controls the name of the generated file.
+package model_file_format;
+
+message UnencryptedLightweightDetails {
+  // Semver for the model version, eg. for when the model is retrained.
+  // Optional.
+  optional string model_version = 1;
+
+  // When the model was created. Timestamp since epoch millis.
+  // Optional.
+  optional uint64 model_created_at = 2;
+
+  // When the model was updated. Timestamp since epoch millis.
+  // Optional.
+  optional uint64 model_updated_at = 3;
+}
+
+message EncryptedLightweightDetails {
+  // Authoritative timestamp of when the model file expires.
+  // Optional in the case of non-expiring model files.
+  optional uint64 expiry_timestamp_millis = 1;
+
+  // If set, this prevents people from rewinding their clock
+  // too far into the past.
+  optional uint64 invalid_before_timestamp_millis = 2;
+
+  // Extra entropy data to add to the encrypted portion.
+  optional bytes entropy_padding = 100;
+}
+
+message EncryptedHeavyPayload {
+  // Model pipeline version
+  optional uint32 model_pipeline_version = 1;
+
+  // Acoustic ML model
+  optional bytes acoustic_bytes = 2;
+
+  // Vocoder ML model
+  optional bytes vocoder_bytes = 3;
+
+  // Extra entropy data to add to the encrypted portion.
+  optional bytes entropy_padding = 100;
+}
