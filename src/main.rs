@@ -574,8 +574,6 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
     let mut input_config = cpal_input_device.as_ref().ok_or(AppError::NoDevice("input"))?.default_input_config().map_err(|_e| AppError::NoDevice("input"))?.config();
     let mut output_config = cpal_output_device.as_ref().ok_or(AppError::NoDevice("output"))?.default_output_config().map_err(|_e| AppError::NoDevice("output"))?.config();
 
-    input_config.buffer_size = BufferSize::Fixed(IN_BUFFER_SIZE as u32);
-    output_config.buffer_size = BufferSize::Fixed(OUT_BUFFER_SIZE as u32);
 
     let in_rate = input_config.sample_rate.0 as usize;
     let in_n_channels = input_config.channels as usize;
@@ -583,8 +581,11 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
     let out_rate = output_config.sample_rate.0 as usize;
     let out_n_channels = output_config.channels as usize;
 
+    let in_chunk_size = (0.4 * in_rate as f32 * in_n_channels as f32) as usize; // 400ms
+    let out_chunk_size = (0.4 * out_rate as f32 * out_n_channels as f32) as usize; // 400ms
 
-    let mut resampler1 = FftFixedInOut::<f32>::new(in_rate, MODEL_SAMPLE_RATE, (CHUNK_SIZE as f32 * (MODEL_SAMPLE_RATE  as f32 / in_rate as f32)) as usize, 1).map_err(|e| AppError::ResamplerConstructionError(e))?;
+
+    let mut resampler1 = FftFixedInOut::<f32>::new(in_rate, MODEL_SAMPLE_RATE, (in_chunk_size as f32 / in_n_channels as f32 * MODEL_SAMPLE_RATE as f32 / in_rate as f32) as usize, 1).map_err(|e| AppError::ResamplerConstructionError(e))?;
     let mut resampler1_input_buffer = resampler1.input_buffer_allocate();
     let mut resampler1_output_buffer = resampler1.output_buffer_allocate();
     let resampler1_input_size = resampler1.input_frames_next();
@@ -595,7 +596,7 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
     trace!("resampler1_output_size: {}", resampler1_output_size);
     resampler1_input_buffer[0].resize(resampler1_input_size, 0.0);
 
-    let mut resampler2 = FftFixedInOut::<f32>::new(MODEL_SAMPLE_RATE, out_rate, CHUNK_SIZE / in_n_channels, 1).map_err(|e| AppError::ResamplerConstructionError(e))?;
+    let mut resampler2 = FftFixedInOut::<f32>::new(MODEL_SAMPLE_RATE, out_rate, in_chunk_size / in_n_channels, 1).map_err(|e| AppError::ResamplerConstructionError(e))?;
     let mut resampler2_input_buffer = resampler2.input_buffer_allocate();
     let mut resampler2_output_buffer = resampler2.output_buffer_allocate();
     let resampler2_input_size = resampler2.input_frames_next();
@@ -606,13 +607,13 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
     trace!("resampler2_output_size: {}", resampler2_output_size);
     resampler2_input_buffer[0].resize(resampler2_input_size, 0.0);
 
-    let ring1: RingBuffer<f32> = RingBuffer::new(resampler1_input_size*2);
+    let ring1: RingBuffer<f32> = RingBuffer::new(in_chunk_size*2);
     let (mut producer1, mut consumer1) = ring1.split();
-    let ring2: RingBuffer<f32> = RingBuffer::new(resampler2_output_size*out_n_channels*2);
+    let ring2: RingBuffer<f32> = RingBuffer::new(out_chunk_size*2);
     let (mut producer2, mut consumer2) = ring2.split();
 
-
-    let mut softvc_input = vec![];
+    input_config.buffer_size = BufferSize::Fixed(in_chunk_size as u32);
+    output_config.buffer_size = BufferSize::Fixed(out_chunk_size as u32);
 
     let input_data_fn = move |data: &cpal::Data, _: &cpal::InputCallbackInfo| {
         let data_slice: &[f32] = data.as_slice().unwrap();
@@ -632,27 +633,31 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
     std::thread::spawn(move || {
         loop {
             if consumer1.len() >= resampler1_input_size {
-                // downsample to 16k
-                resampler1_input_buffer[0].fill(0.0);
-                let _ = consumer1.pop_slice(&mut resampler1_input_buffer[0]);
-                let _ = resampler1.process_into_buffer(&resampler1_input_buffer, &mut resampler1_output_buffer, None);
                 // mix stereo (or more channels) to mono
-                softvc_input.clear();
-                for ch in resampler1_output_buffer[0].chunks(in_n_channels) {
+                resampler1_input_buffer[0].clear();
+                for _ in 0..(in_chunk_size / in_n_channels) {
                     let mut mixed: f32 = 0.0;
-                    for i in 0..ch.len() {
-                        mixed += ch[i]; 
+                    for _ in 0..in_n_channels {
+                        mixed += consumer1.pop().unwrap_or(0.0); 
                     }
-                    softvc_input.push(mixed);
+                    resampler1_input_buffer[0].push(mixed);
                 }
+                // downsample to 16k
+                resampler1.process_into_buffer(&resampler1_input_buffer, &mut resampler1_output_buffer, None).unwrap();
 
-                softvc_input.resize(TENSOR_SIZE, 0.0);
+
+                let mut softvc_input = resampler1_output_buffer[0].clone();
+                while softvc_input.len() < TENSOR_SIZE {
+                    softvc_input.extend_from_within(0..softvc_input.len());
+                }
+                //softvc_input.resize(TENSOR_SIZE, 0.0);
 
                 // Find active 50ms chunks with Silero VAD
-                let mut vad_confidence = vec![0.0; (resampler1_output_size as f32 / in_n_channels  as f32 / VAD_SIZE as f32).ceil() as usize];
+                let mut vad_confidence = vec![0.0; resampler1_output_size / VAD_SIZE+1];
                 let mut v = 0;
-                softvc_input[..resampler1_output_size / in_n_channels].chunks(VAD_SIZE).for_each(|chunk| {
-                    unsafe { VAD_CHUNK[..chunk.len()].copy_from_slice(chunk)};
+                softvc_input[..resampler1_output_size].chunks(VAD_SIZE).for_each(|chunk| {
+                    unsafe { VAD_CHUNK.fill(0.0); }
+                    unsafe { VAD_CHUNK[..chunk.len()].copy_from_slice(chunk) };
                     let vad_res = vad.forward(unsafe { &VAD_CHUNK});
                     let mut vad_tensor = tch::Tensor::of_slice(&[0.0]);
                     match vad_res {
@@ -681,23 +686,21 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
                         cancel_token1.store(true, std::sync::atomic::Ordering::Relaxed);
                     },
                     Ok(samples) => {
-                        resampler2_input_buffer[0].clear();
-                        resampler2_input_buffer[0].extend(
+                        resampler2_input_buffer[0].iter_mut().zip(
                         samples.iter()
                             .enumerate()
                             .map(|(e, sample)| {
                                 let mut sa = 0.0;
-                                for i in 0..resampler1_output_size / in_n_channels / VAD_SIZE {
-                                    if e < (i+1)*VAD_SIZE && e > i*VAD_SIZE &&  vad_confidence[i] > SPEAKER_THRESHOLD {
+                                for i in 0..(samples.len() / VAD_SIZE)  {
+                                    if e < (i+1)*VAD_SIZE && e >= i*VAD_SIZE &&  vad_confidence[i] > SPEAKER_THRESHOLD {
                                         sa = *sample;
                                         break;
                                     }
                                 }
                                 sa
                             })
-                            .take(resampler1_output_size / in_n_channels)
-                        );
-                        let _ = resampler2.process_into_buffer(&resampler2_input_buffer, &mut resampler2_output_buffer, None);
+                        ).for_each(|(i2, o1)| *i2 = o1);
+                        resampler2.process_into_buffer(&resampler2_input_buffer, &mut resampler2_output_buffer, None).unwrap();
                         resampler2_output_buffer[0].iter().for_each(|&sample| {
                             // mono to stereo etc.
                             for _ in 0..out_n_channels {

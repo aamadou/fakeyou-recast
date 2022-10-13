@@ -118,7 +118,8 @@ pub fn play_audio_buf(output_device: DeviceType, buf: Vec<f32>, volume: f32) -> 
 
             // Resample
             let out_rate = output_config.sample_rate.0 as usize;
-            let mut resampler = FftFixedInOut::<f32>::new(MODEL_SAMPLE_RATE, out_rate, CHUNK_SIZE, 1).map_err(|e| AppError::ResamplerConstructionError(e))?;
+            let chunk_size = (out_rate as f32 * 0.4 * output_config.channels as f32) as usize; // 400ms
+            let mut resampler = FftFixedInOut::<f32>::new(MODEL_SAMPLE_RATE, out_rate, chunk_size, 1).map_err(|e| AppError::ResamplerConstructionError(e))?;
             let mut resampler_input_buffer = resampler.input_buffer_allocate();
             let mut resampler_output_buffer = resampler.input_buffer_allocate();
 
@@ -182,7 +183,8 @@ pub fn record_audio_vec(input_device: DeviceType, receiver: std::sync::mpsc::Rec
 
             // Resample
             let in_rate = reader.spec().sample_rate as usize;
-            let mut resampler = FftFixedInOut::<f32>::new(in_rate, MODEL_SAMPLE_RATE, CHUNK_SIZE, 1).map_err(|e| AppError::ResamplerConstructionError(e))?;
+            let chunk_size = (in_rate as f32 * 0.4 * reader.spec().channels as f32) as usize; // 400ms
+            let mut resampler = FftFixedInOut::<f32>::new(in_rate, MODEL_SAMPLE_RATE, chunk_size, 1).map_err(|e| AppError::ResamplerConstructionError(e))?;
             let mut resampler_input_buffer = resampler.input_buffer_allocate();
             let mut resampler_output_buffer = resampler.input_buffer_allocate();
 
@@ -265,7 +267,8 @@ pub fn record_audio_vec(input_device: DeviceType, receiver: std::sync::mpsc::Rec
 
             // Resample
             let in_rate = input_config.sample_rate.0 as usize;
-            let mut resampler = FftFixedInOut::<f32>::new(in_rate, MODEL_SAMPLE_RATE, CHUNK_SIZE, 1).map_err(|e| AppError::ResamplerConstructionError(e))?;
+            let chunk_size = (in_rate as f32 * 0.4 * input_config.channels as f32) as usize; // 400ms
+            let mut resampler = FftFixedInOut::<f32>::new(in_rate, MODEL_SAMPLE_RATE, chunk_size, 1).map_err(|e| AppError::ResamplerConstructionError(e))?;
             let mut resampler_input_buffer = resampler.input_buffer_allocate();
             let mut resampler_output_buffer = resampler.input_buffer_allocate();
 
