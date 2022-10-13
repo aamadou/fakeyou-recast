@@ -635,9 +635,8 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
                 // downsample to 16k
                 resampler1_input_buffer[0].fill(0.0);
                 let _ = consumer1.pop_slice(&mut resampler1_input_buffer[0]);
-                resampler1.process_into_buffer(&resampler1_input_buffer, &mut resampler1_output_buffer, None);
+                let _ = resampler1.process_into_buffer(&resampler1_input_buffer, &mut resampler1_output_buffer, None);
                 // mix stereo (or more channels) to mono
-                //let mut j = 0;
                 softvc_input.clear();
                 for ch in resampler1_output_buffer[0].chunks(in_n_channels) {
                     let mut mixed: f32 = 0.0;
@@ -698,7 +697,7 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
                             })
                             .take(resampler1_output_size / in_n_channels)
                         );
-                        resampler2.process_into_buffer(&resampler2_input_buffer, &mut resampler2_output_buffer, None).unwrap();
+                        let _ = resampler2.process_into_buffer(&resampler2_input_buffer, &mut resampler2_output_buffer, None);
                         resampler2_output_buffer[0].iter().for_each(|&sample| {
                             // mono to stereo etc.
                             for _ in 0..out_n_channels {
