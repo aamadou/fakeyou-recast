@@ -89,11 +89,11 @@ fn init_logging() -> Result<(), fern::InitError> {
                 message
             ))
         })
-        .level_for("fakeyou_recast", log::LevelFilter::Info)
+        .level_for("fakeyou_recast", log::LevelFilter::Trace)
         
         .level_for("fakeyou_recast::audio", log::LevelFilter::Info)
-        .level_for("fakeyou_recast::softvc", log::LevelFilter::Info)
-        .level_for("fakeyou_recast::vad", log::LevelFilter::Info)   // commented out because I
+        //.level_for("fakeyou_recast::softvc", log::LevelFilter::Info)
+        //.level_for("fakeyou_recast::vad", log::LevelFilter::Info)   // commented out because I
                                                                     // realized this leaks our
                                                                     // model architecture (as a
                                                                     // string),
@@ -111,7 +111,6 @@ fn init_logging() -> Result<(), fern::InitError> {
 static mut INPUT_VOLUME: f32 = 80.0;
 static mut OUTPUT_VOLUME: f32 = 80.0;
 
-static mut SOFTVC_INPUT: [f32; TENSOR_SIZE] = [0.0f32; TENSOR_SIZE];
 static mut VAD_CHUNK: [f32; VAD_SIZE] = [0.0f32; VAD_SIZE];
 
 struct App {
@@ -584,7 +583,8 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
     let out_rate = output_config.sample_rate.0 as usize;
     let out_n_channels = output_config.channels as usize;
 
-    let mut resampler1 = FftFixedInOut::<f32>::new(in_rate, MODEL_SAMPLE_RATE, CHUNK_SIZE, 1).map_err(|e| AppError::ResamplerConstructionError(e))?;
+
+    let mut resampler1 = FftFixedInOut::<f32>::new(in_rate, MODEL_SAMPLE_RATE, (CHUNK_SIZE as f32 * (MODEL_SAMPLE_RATE  as f32 / in_rate as f32)) as usize, 1).map_err(|e| AppError::ResamplerConstructionError(e))?;
     let mut resampler1_input_buffer = resampler1.input_buffer_allocate();
     let mut resampler1_output_buffer = resampler1.output_buffer_allocate();
     let resampler1_input_size = resampler1.input_frames_next();
@@ -595,7 +595,7 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
     trace!("resampler1_output_size: {}", resampler1_output_size);
     resampler1_input_buffer[0].resize(resampler1_input_size, 0.0);
 
-    let mut resampler2 = FftFixedInOut::<f32>::new(MODEL_SAMPLE_RATE, out_rate, CHUNK_SIZE_16K, 1).map_err(|e| AppError::ResamplerConstructionError(e))?;
+    let mut resampler2 = FftFixedInOut::<f32>::new(MODEL_SAMPLE_RATE, out_rate, CHUNK_SIZE / in_n_channels, 1).map_err(|e| AppError::ResamplerConstructionError(e))?;
     let mut resampler2_input_buffer = resampler2.input_buffer_allocate();
     let mut resampler2_output_buffer = resampler2.output_buffer_allocate();
     let resampler2_input_size = resampler2.input_frames_next();
@@ -606,13 +606,13 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
     trace!("resampler2_output_size: {}", resampler2_output_size);
     resampler2_input_buffer[0].resize(resampler2_input_size, 0.0);
 
-    let output_chunk_size = resampler2_output_size * out_n_channels;
     let ring1: RingBuffer<f32> = RingBuffer::new(resampler1_input_size*2);
     let (mut producer1, mut consumer1) = ring1.split();
-    let ring2: RingBuffer<f32> = RingBuffer::new(output_chunk_size*2);
+    let ring2: RingBuffer<f32> = RingBuffer::new(resampler2_output_size*out_n_channels*2);
     let (mut producer2, mut consumer2) = ring2.split();
-    let ring3: RingBuffer<f32> = RingBuffer::new(resampler2_input_size*out_n_channels*2);
-    let (mut producer3, mut consumer3) = ring3.split();
+
+
+    let mut softvc_input = vec![];
 
     let input_data_fn = move |data: &cpal::Data, _: &cpal::InputCallbackInfo| {
         let data_slice: &[f32] = data.as_slice().unwrap();
@@ -621,35 +621,59 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
         }
     };
 
-    let mut p = 0;
     let output_data_fn = move |data: &mut cpal::Data, _: &cpal::OutputCallbackInfo| {
-        if consumer1.len() >= resampler1_input_size {
-            // downsample to 16k
-            resampler1_input_buffer[0].fill(0.0);
-            consumer1.pop_slice(&mut resampler1_input_buffer[0]);
-            resampler1.process_into_buffer(&resampler1_input_buffer, &mut resampler1_output_buffer, None);
-            // mix stereo (or more channels) to mono
-            let mut j = 0;
-            for channel in resampler1_output_buffer[0].chunks(in_n_channels) {
-                let mut mixed: f32 = 0.0;
-                for i in 0..channel.len() {
-                    mixed += channel[i]; 
-                }
-                unsafe { SOFTVC_INPUT[j] = mixed };
-                j += 1;
-                if j >= unsafe { SOFTVC_INPUT }.len() {
-                    j = 0;
-                }
-            }
+        let data_slice: &mut [f32] = data.as_slice_mut().unwrap();
+        for sample in data_slice.iter_mut() {
+            *sample = audio::apply_volume(consumer2.pop().unwrap_or(0.0), unsafe { OUTPUT_VOLUME });
+        }
+    };
 
-            // Find active 50ms chunks with Silero VAD
-            let mut vad_confidence = vec![0.0; resampler1_output_size / VAD_SIZE];
-            let mut v = 0;
-            unsafe { &SOFTVC_INPUT[..resampler1_output_size] }.chunks(VAD_SIZE).for_each(|chunk| {
-                unsafe { VAD_CHUNK.copy_from_slice(chunk)};
-                let vad_res = vad.forward(unsafe { &VAD_CHUNK});
-                let mut vad_tensor = tch::Tensor::of_slice(&[0.0]);
-                match vad_res {
+
+    std::thread::spawn(move || {
+        loop {
+            if consumer1.len() >= resampler1_input_size {
+                // downsample to 16k
+                resampler1_input_buffer[0].fill(0.0);
+                let _ = consumer1.pop_slice(&mut resampler1_input_buffer[0]);
+                resampler1.process_into_buffer(&resampler1_input_buffer, &mut resampler1_output_buffer, None);
+                // mix stereo (or more channels) to mono
+                //let mut j = 0;
+                softvc_input.clear();
+                for ch in resampler1_output_buffer[0].chunks(in_n_channels) {
+                    let mut mixed: f32 = 0.0;
+                    for i in 0..ch.len() {
+                        mixed += ch[i]; 
+                    }
+                    softvc_input.push(mixed);
+                }
+
+                softvc_input.resize(TENSOR_SIZE, 0.0);
+
+                // Find active 50ms chunks with Silero VAD
+                let mut vad_confidence = vec![0.0; (resampler1_output_size as f32 / in_n_channels  as f32 / VAD_SIZE as f32).ceil() as usize];
+                let mut v = 0;
+                softvc_input[..resampler1_output_size / in_n_channels].chunks(VAD_SIZE).for_each(|chunk| {
+                    unsafe { VAD_CHUNK[..chunk.len()].copy_from_slice(chunk)};
+                    let vad_res = vad.forward(unsafe { &VAD_CHUNK});
+                    let mut vad_tensor = tch::Tensor::of_slice(&[0.0]);
+                    match vad_res {
+                        Err(e) => {
+                            // don't spam errors if there's already one known
+                            if !cancel_token1.load(std::sync::atomic::Ordering::Relaxed) {
+                                handle_errors(Err(e));
+                            }
+                            cancel_token1.store(true, std::sync::atomic::Ordering::Relaxed);
+                        },
+                        Ok(t) => {
+                            vad_tensor = t;
+                        }
+                    }
+                    vad_confidence[v] = vad_tensor.double_value(&[0]) as f32;
+                    v += 1;
+                });
+                
+                let res = softvc::inference(&softvc_input, hubert.clone(), acoustic.clone(), hifigan.clone());
+                match res {
                     Err(e) => {
                         // don't spam errors if there's already one known
                         if !cancel_token1.load(std::sync::atomic::Ordering::Relaxed) {
@@ -657,81 +681,38 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
                         }
                         cancel_token1.store(true, std::sync::atomic::Ordering::Relaxed);
                     },
-                    Ok(t) => {
-                        vad_tensor = t;
-                    }
-                }
-                vad_confidence[v] = vad_tensor.double_value(&[0]) as f32;
-                v += 1;
-            });
-            
-            // Dupe SOFTVC_INPUT until it is TENSOR_SIZE long
-            for k in 1..(TENSOR_SIZE/resampler1_output_size) {
-                unsafe { SOFTVC_INPUT.copy_within(0..resampler1_output_size, resampler1_output_size*k)};
-            }
-            let res = softvc::inference(unsafe { &SOFTVC_INPUT }, hubert.clone(), acoustic.clone(), hifigan.clone());
-            match res {
-                Err(e) => {
-                    // don't spam errors if there's already one known
-                    if !cancel_token1.load(std::sync::atomic::Ordering::Relaxed) {
-                        handle_errors(Err(e));
-                    }
-                    cancel_token1.store(true, std::sync::atomic::Ordering::Relaxed);
-                },
-                Ok(samples) => {
-                    samples.iter()
-                        .enumerate()
-                        .map(|(e, sample)| {
-                            let mut sa = 0.0;
-                            for i in 0..resampler1_output_size/VAD_SIZE {
-                                if e < (i+1)*VAD_SIZE && e > i*VAD_SIZE &&  vad_confidence[i] > SPEAKER_THRESHOLD {
-                                    sa = *sample;
-                                    break;
+                    Ok(samples) => {
+                        resampler2_input_buffer[0].clear();
+                        resampler2_input_buffer[0].extend(
+                        samples.iter()
+                            .enumerate()
+                            .map(|(e, sample)| {
+                                let mut sa = 0.0;
+                                for i in 0..resampler1_output_size / in_n_channels / VAD_SIZE {
+                                    if e < (i+1)*VAD_SIZE && e > i*VAD_SIZE &&  vad_confidence[i] > SPEAKER_THRESHOLD {
+                                        sa = *sample;
+                                        break;
+                                    }
                                 }
+                                sa
+                            })
+                            .take(resampler1_output_size / in_n_channels)
+                        );
+                        resampler2.process_into_buffer(&resampler2_input_buffer, &mut resampler2_output_buffer, None).unwrap();
+                        resampler2_output_buffer[0].iter().for_each(|&sample| {
+                            // mono to stereo etc.
+                            for _ in 0..out_n_channels {
+                                producer2.push(sample).unwrap_or(()); 
                             }
-                            sa
-                        })
-                        .for_each(|sample| { producer3.push(sample).unwrap_or(()); p += 1;});
+                        });
+                    }
                 }
             }
-        }
 
-        let data_slice: &mut [f32] = data.as_slice_mut().unwrap();
-        if consumer2.len() >= output_chunk_size
-        {
-            // send output
-            for sample in data_slice.iter_mut() {
-                *sample = audio::apply_volume(consumer2.pop().unwrap_or(0.0), unsafe { OUTPUT_VOLUME });
+            if cancel_token3.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
             }
-        } else {
-            // send silence
-            data_slice.fill(0.0);
         }
-    };
-
-
-    std::thread::spawn(move || {
-        println!("input size: {}", resampler2_input_size);
-    loop {
-        println!("{}", consumer3.len());
-        if consumer3.len() >= resampler2_input_size {
-            // resample
-            consumer3.pop_slice(&mut resampler2_input_buffer[0][..resampler2_input_size]);
-            resampler2.process_into_buffer(&resampler2_input_buffer, &mut resampler2_output_buffer, None);
-            resampler2_output_buffer[0].iter().for_each(|&sample| {
-                // mono to stereo etc.
-                for _ in 0..out_n_channels {
-                    producer2.push(sample).unwrap_or(()); 
-                }
-            });
-        }
-        if cancel_token3.load(std::sync::atomic::Ordering::Relaxed) {
-            break;
-        }
-        // FIXME Kind of a hack
-        let sleep_time_secs = resampler2_input_size as f32 / MODEL_SAMPLE_RATE as f32 * 0.85;
-        std::thread::sleep(core::time::Duration::from_secs_f32(sleep_time_secs));
-    }
     });
 
     let input_stream = cpal_input_device.ok_or(AppError::NoDevice("input"))?.build_input_stream_raw(&input_config, SampleFormat::F32, input_data_fn, audio::err_fn).map_err(|e| AppError::BuildInputStreamError(e))?;
@@ -741,7 +722,6 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
     loop {
         if cancel_token2.load(std::sync::atomic::Ordering::Relaxed) {
             //FIXME set the button text back to realtime instead of leaving it as stop.
-            info!("Cancelled realtime recording due to an error");
             core::mem::drop(input_stream);
             core::mem::drop(output_stream);
             break;
