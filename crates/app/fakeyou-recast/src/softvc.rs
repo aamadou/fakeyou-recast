@@ -1,3 +1,4 @@
+use std::io::BufReader;
 use std::sync::{Arc, Mutex};
 use std::path::PathBuf;
 use tch::{CModule, Tensor};
@@ -9,6 +10,20 @@ pub trait Model {
     fn load(&self, path: PathBuf) -> Result <(), AppError> {
         let mut lock = self.get_inner().try_lock().map_err(|_e| AppError::LockError)?;
         let mut inner_model = CModule::load(path).map_err(|_e| AppError::ModelLoadError)?;
+        inner_model.to(tch::Device::Cuda(0), tch::Kind::Float, false);
+        inner_model.set_eval();
+        *lock = Some(inner_model);
+        Ok(())
+    }
+
+    fn load_bytes(&self, model_bytes: &[u8]) -> Result<(), AppError> {
+        let mut readable = BufReader::new(model_bytes);
+        self.load_readable(&mut readable)
+    }
+
+    fn load_readable<T: std::io::Read>(&self, model_bytes: &mut T) -> Result<(), AppError> {
+        let mut lock = self.get_inner().try_lock().map_err(|_e| AppError::LockError)?;
+        let mut inner_model = CModule::load_data(model_bytes).map_err(|_e| AppError::ModelLoadError)?;
         inner_model.to(tch::Device::Cuda(0), tch::Kind::Float, false);
         inner_model.set_eval();
         *lock = Some(inner_model);
