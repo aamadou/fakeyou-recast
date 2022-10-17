@@ -1,0 +1,19 @@
+[package]
+name = "model-serialization"
+version = "0.1.0"
+edition = "2021"
+resolver = "2"
+publish = false
+
+[dependencies]
+anyhow = "1.0.65"
+bincode = "2.0.0-rc.2"
+bytes = "1.2"
+magic-crypt = "3.1"
+prost = "0.11"
+
+[build-dependencies]
+prost-build = "0.11"
+
+[dev-dependencies]
+tempfile = "3.3.0"

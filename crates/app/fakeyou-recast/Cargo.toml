@@ -1,0 +1,31 @@
+[package]
+name = "fakeyou-recast"
+version = "0.1.0"
+edition = "2021"
+resolver = "2"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+iced = {version = "0.4.2", features=["tokio"]}
+iced_native = "0.5.1"
+iced_aw = { version = "0.2.0", default-features=false, features=["card", "modal"]}
+native-dialog = "0.6.3"
+cpal = "0.14.0"
+ringbuf = "0.2.8"
+tch = "0.8.0"
+hound = "3.4.0"
+thiserror = "1.0"
+fern = "0.6.1"
+log = "0.4.17"
+chrono = "0.4.22"
+rubato = "0.12.0"
+reqwest = { version = "0.11.12", features=["json", "cookies"] }
+json = "0.12.4" # untyped json crate, for processing responses which might not have fixed structure
+
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"
+
+[profile.release]
+#lto = true
+strip = true

@@ -60,7 +60,7 @@ pub enum AppError {
 }
 
 
-const ICON: &[u8; 262144] = include_bytes!("../assets/icon.data");
+const ICON: &[u8; 262144] = include_bytes!("../../../../assets/icon.data");
 
 pub fn main() -> iced::Result {
     let _ = init_logging(); //nowhere to log an error if one happens here

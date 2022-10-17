@@ -1,0 +1,1 @@
+This is a small and invalid file that does not have the magic bytes.
