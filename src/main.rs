@@ -1,7 +1,7 @@
 // launch as a gui app on windows without a command prompt
 #![windows_subsystem = "windows"]
 
-use std::{path::PathBuf, env};
+use std::{path::PathBuf, env, io::Write};
 use iced::{executor, Application, Element, Command, Settings, window::{self, Icon}, Subscription, keyboard::{self, KeyCode}};
 use iced_native::{event, subscription, Event};
 use cpal::{SampleRate, BufferSize, SampleFormat};
@@ -17,6 +17,7 @@ mod audio;
 mod softvc;
 mod vad;
 mod consts;
+mod api;
 
 use softvc::Model;
 use audio::DeviceType;
@@ -57,6 +58,7 @@ pub enum AppError {
     #[error("Resampling failed:\n{0}")]
     ResampleError(#[from] rubato::ResampleError)
 }
+
 
 const ICON: &[u8; 262144] = include_bytes!("../assets/icon.data");
 
@@ -121,6 +123,8 @@ struct App {
     view_state: view::ViewState,
     input_device_list_options: Vec<String>,
     output_device_list_options: Vec<String>,
+    session_token: Option<String>,
+    userdata: Option<json::JsonValue>,
     record_sender: Option<std::sync::mpsc::Sender<(bool, f32)>>,
     realtime_record_sender: Option<std::sync::mpsc::Sender<(bool, f32, f32)>>,
     recording: bool,
@@ -145,6 +149,13 @@ pub enum Message {
     InputBrowsePressed,
     OutputBrowsePressed,
     RecordingFinished(Vec<f32>),
+    UsernameChanged(String),
+    PasswordChanged(String),
+    LoginPressed,
+    LoginSuccess(String),
+    LoginFailed(api::ApiError),
+    SessionValid(json::JsonValue),
+    SessionFailed(api::ApiError),
     None
 }
 
@@ -177,7 +188,7 @@ impl Application for App {
         let acoustic = softvc::Acoustic::new();
         let hifigan = softvc::Hifigan::new();
         let vad = vad::Vad::new();
-        let view_state = view::ViewState::new();
+        let mut view_state = view::ViewState::new();
         let recording = false;
         let record_sender = None;
         let realtime_record_sender = None;
@@ -186,9 +197,27 @@ impl Application for App {
         input_device_list_options.insert(0, String::from("From file"));
         let mut output_device_list_options: Vec<String> = audio::get_output_device_list();
         output_device_list_options.insert(0, String::from("To file"));
+
+
+        let mut session_token = None;
+        let userdata = None;
+        if let Ok(string) = std::fs::read_to_string(".sessiontoken") {
+            session_token = Some(string);
+        }
+
         let record_vec = Vec::new();
 
+        view_state.login_modal_state.show(true);
+
         tch::maybe_init_cuda();
+
+        let command;
+        if let Some(token) =  session_token.clone() {
+           command = Command::perform(api::check_session(token), api::session_callback);
+        }
+        else {
+            command = Command::none();
+        }
 
         (
             App {
@@ -199,13 +228,15 @@ impl Application for App {
                 view_state,
                 input_device_list_options,
                 output_device_list_options,
+                session_token,
+                userdata,
                 recording,
                 record_sender,
                 realtime_recording,
                 realtime_record_sender,
                 record_vec,
             },
-            Command::none()
+            command
         )
     }
 
@@ -510,6 +541,37 @@ impl Application for App {
             Message::RecordingFinished(vec) => {
                 self.record_vec = vec;
             }
+            Message::UsernameChanged(username) => {
+                self.view_state.login_modal_state.inner_mut().username_field_value = username;
+            }
+            Message::PasswordChanged(password) => {
+                self.view_state.login_modal_state.inner_mut().password_field_value = password;
+            }
+            Message::LoginPressed => {
+                let username = self.view_state.login_modal_state.inner().username_field_value.clone();
+                let password = self.view_state.login_modal_state.inner().password_field_value.clone();
+
+                command = Command::perform(api::login(username, password), api::login_callback);
+            }
+            Message::LoginSuccess(token) => {
+                match std::fs::File::create(".sessiontoken") {
+                    Ok(mut file) => { let _ = file.write_all(token.as_bytes()); },
+                    Err(e) => { error!("Failed to write the session token to file: {}", e); }
+                }
+                self.view_state.login_modal_state.inner_mut().login_failed = false;
+                self.view_state.login_modal_state.show(false);
+            }
+            Message::LoginFailed(e) => {
+                self.view_state.login_modal_state.inner_mut().login_err_msg = format!("{}", e);
+                self.view_state.login_modal_state.inner_mut().login_failed = true;
+            }
+            Message::SessionValid(user) => {
+                self.userdata = Some(user);
+                self.view_state.login_modal_state.show(false);
+            }
+            Message::SessionFailed(e) => {
+                error!("Error validating session: {}", e);
+            }
             Message::None => { }
         }
         command
@@ -692,7 +754,7 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
                             .map(|(e, sample)| {
                                 let mut sa = 0.0;
                                 for i in 0..(samples.len() / VAD_SIZE)  {
-                                    if e < (i+1)*VAD_SIZE && e >= i*VAD_SIZE &&  vad_confidence[i] > SPEAKER_THRESHOLD {
+                                    if e < (i+1)*VAD_SIZE && e > i*VAD_SIZE &&  vad_confidence[i] > SPEAKER_THRESHOLD {
                                         sa = *sample;
                                         break;
                                     }
@@ -962,3 +1024,4 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
     info!("Finished playing target audio");
     Ok(())
 }
+
