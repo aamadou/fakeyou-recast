@@ -6,6 +6,7 @@ use iced_aw::{modal::{self, Modal}, card::{self, Card}};
 #[derive(Default)]
 pub struct ViewState {
     pub login_modal_state: modal::State<LoginModalState>,
+    pub fakeyou_model_browse_state: button::State,
     pub model_browse_state: button::State,
     pub record_state: button::State,
     pub play_target_state: button::State,
@@ -19,6 +20,7 @@ pub struct ViewState {
     pub slider_2_state: slider::State,
     pub input_device_list_state: pick_list::State<String>,
     pub output_device_list_state: pick_list::State<String>,
+    pub fakeyou_model_browse_selected: Option<PathBuf>,
     pub model_browse_selected: Option<PathBuf>,
     pub hifigan_browse_selected: Option<PathBuf>,
     pub hubert_browse_selected: Option<PathBuf>,
@@ -51,8 +53,23 @@ impl ViewState{
     }
 }
 pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a Vec<String>, output_device_list_options: &'a Vec<String>, recording: bool, realtime_recording: bool) -> Element<'a, Message> {
-    let mut model_selection_row_elems: Vec<Element<Message>> = vec![];
     let empty_pathbuf = PathBuf::from("");
+
+    // NB: New model selection
+    let mut fakeyou_model_selection_row_elems: Vec<Element<Message>> = vec![];
+    let selected_fakeyou_model_str = if view_state.fakeyou_model_browse_selected.is_none() { "" } else {view_state.fakeyou_model_browse_selected.as_ref().unwrap_or(&empty_pathbuf).file_stem().unwrap_or_default().to_str().unwrap_or_default() };
+
+    fakeyou_model_selection_row_elems
+        .push(Text::new("Select FakeYou Model File: ").into());
+    fakeyou_model_selection_row_elems
+        .push(Button::new(&mut view_state.fakeyou_model_browse_state, Text::new("Browse")).on_press(Message::FakeYouModelBrowsePressed).into());
+    fakeyou_model_selection_row_elems
+        .push(Text::new(selected_fakeyou_model_str).into());
+
+    let fakeyou_model_selection_row = Row::with_children(fakeyou_model_selection_row_elems).spacing(10);
+
+    // NB: Old model selection
+    let mut model_selection_row_elems: Vec<Element<Message>> = vec![];
     let selected_model_str = if view_state.model_browse_selected.is_none() { "" } else {view_state.model_browse_selected.as_ref().unwrap_or(&empty_pathbuf).file_stem().unwrap_or_default().to_str().unwrap_or_default() };
     let selected_hifigan_str = if view_state.hifigan_browse_selected.is_none() { "" } else {view_state.hifigan_browse_selected.as_ref().unwrap_or(&empty_pathbuf).file_stem().unwrap_or_default().to_str().unwrap_or_default() };
     let selected_hubert_str = if view_state.hubert_browse_selected.is_none() { "" } else {view_state.hubert_browse_selected.as_ref().unwrap_or(&empty_pathbuf).file_stem().unwrap_or_default().to_str().unwrap_or_default() };
@@ -105,6 +122,8 @@ pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a V
     let file_selection_row = Row::with_children(file_selection_row_elems).spacing(10);
 
     let main_ui = Column::new().spacing(5)
+        .push(fakeyou_model_selection_row)
+        .push(Row::new().spacing(10))
         .push(model_selection_row)
         .push(
             Row::new().spacing(10)

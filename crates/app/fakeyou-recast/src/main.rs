@@ -1,16 +1,18 @@
 // launch as a gui app on windows without a command prompt
 #![windows_subsystem = "windows"]
 
-use std::{path::PathBuf, env, io::Write};
+use anyhow::anyhow;
+use cpal::traits::{DeviceTrait, StreamTrait};
+use cpal::{SampleRate, BufferSize, SampleFormat};
 use iced::{executor, Application, Element, Command, Settings, window::{self, Icon}, Subscription, keyboard::{self, KeyCode}};
 use iced_native::{event, subscription, Event};
-use cpal::{SampleRate, BufferSize, SampleFormat};
-use cpal::traits::{DeviceTrait, StreamTrait};
-use ringbuf::RingBuffer;
-use native_dialog::{FileDialog, MessageDialog};
-use thiserror::Error;
 use log::{info, trace, warn, error};
+use model_serialization::model_serializer::ModelSerializer;
+use native_dialog::{FileDialog, MessageDialog};
+use ringbuf::RingBuffer;
 use rubato::{FftFixedInOut, Resampler};
+use std::{path::PathBuf, env, io::Write};
+use thiserror::Error;
 
 mod view;
 mod audio;
@@ -116,6 +118,10 @@ static mut OUTPUT_VOLUME: f32 = 80.0;
 static mut VAD_CHUNK: [f32; VAD_SIZE] = [0.0f32; VAD_SIZE];
 
 struct App {
+    /// Directory the application is launched from / running in.
+    current_directory: PathBuf,
+    /// Utility that handles model file loading and decryption.
+    model_serializer: ModelSerializer,
     hubert: softvc::Hubert,
     acoustic: softvc::Acoustic,
     hifigan: softvc::Hifigan,
@@ -134,6 +140,7 @@ struct App {
 
 #[derive(Clone, Debug)]
 pub enum Message {
+    FakeYouModelBrowsePressed,
     ModelBrowsePressed,
     HifiganBrowsePressed,
     HubertBrowsePressed,
@@ -219,8 +226,14 @@ impl Application for App {
             command = Command::none();
         }
 
+        let launch_location = env::current_dir()
+            .map_err(|err| println!("startup directory could not be found: {:?}", err))
+            .unwrap_or(PathBuf::from(""));
+
         (
             App {
+                current_directory: launch_location,
+                model_serializer: ModelSerializer::new("FAKEYOU_DEVELOPMENT"), // TODO: Real secrets.
                 hubert,
                 acoustic,
                 hifigan,
@@ -317,7 +330,15 @@ impl Application for App {
                 }
                 self.realtime_recording = !self.realtime_recording;
             }
-            Message::ModelBrowsePressed => { 
+            Message::FakeYouModelBrowsePressed => {
+                match self.handle_fakeyou_model_browse_pressed() {
+                    Err(e) => {
+                        handle_errors(Err(AppError::FileDialogError(self.current_directory.clone())));
+                    }
+                    Ok(_) => {}
+                }
+            }
+            Message::ModelBrowsePressed => {
                 let location = env::current_dir();
                 if location.is_err() {
                     // how does this even happen?
@@ -598,6 +619,60 @@ impl Application for App {
     }
 
 
+}
+
+impl App {
+    fn handle_fakeyou_model_browse_pressed(&mut self) -> anyhow::Result<()> {
+        let mut model_directory = self.current_directory.clone();
+        model_directory.push("models");
+
+        let path = FileDialog::new()
+            .add_filter("FakeYou Model", &["fakeyou"])
+            .set_location(&model_directory)
+            .show_open_single_file();
+
+        match path {
+            Ok(Some(p)) => {
+                let model = self.model_serializer.read_full_model_file(&p)
+                    .map_err(|e| anyhow!("Could not load model file"))?;
+
+                let acoustic = self.acoustic.clone();
+                let hifigan = self.hifigan.clone();
+
+                // TODO use async instead of threads and handle errors
+                std::thread::spawn(move ||{
+                    acoustic.load_bytes(&model.acoustic_model_bytes)
+                        .map_err(|e| {
+                            e
+                        })
+                        .unwrap();
+                    hifigan.load_bytes(&model.vocoder_model_bytes)
+                        .map_err(|e| {
+                            e
+                        })
+                        .unwrap();
+                });
+
+                self.view_state.fakeyou_model_browse_selected = Some(p.clone());
+
+                let hubert = self.hubert.clone();
+                std::thread::spawn(move ||{
+                    hubert.load(PathBuf::from("./models/model2.recast_base"))}
+                );
+
+                self.view_state.hubert_browse_selected = Some(PathBuf::from("./models/model2.recast_base"));
+
+                let vad = self.vad.clone();
+                std::thread::spawn(move || {
+                    vad.load(PathBuf::from("./models/silero_vad.jit"))
+                });
+            },
+            Ok(None) => {},
+            Err(_e) => { /*handle_errors(Err(AppError::FileDialogError(location)));*/ }
+        }
+        //FIXME some kind of progress bar while all this crap loads
+        Ok(())
+    }
 }
 
 //FIXME break this up and move parts of it into audio.rs

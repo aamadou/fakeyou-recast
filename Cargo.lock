@@ -964,6 +964,7 @@ dependencies = [
 name = "fakeyou-recast"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "chrono",
  "cpal",
  "fern",
@@ -973,6 +974,7 @@ dependencies = [
  "iced_native",
  "json",
  "log",
+ "model-serialization",
  "native-dialog",
  "reqwest",
  "ringbuf",
