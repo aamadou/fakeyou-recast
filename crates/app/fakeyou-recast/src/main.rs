@@ -148,8 +148,11 @@ struct App {
     recording: bool,
     realtime_recording: bool,
     record_vec: Vec<f32>,
+    model_list_server: Vec<api::AppModelDownloadsItem>,
 }
 
+//FIXME find a way to have lifetimes in this so we can have references to pick list items
+// instead of cloning them
 #[derive(Clone, Debug)]
 pub enum Message {
     FakeYouModelBrowsePressed,
@@ -172,9 +175,14 @@ pub enum Message {
     PasswordChanged(String),
     LoginPressed,
     LoginSuccess(String),
-    LoginFailed(api::ApiError),
+    LoginFailure(api::ApiError),
     SessionValid(json::JsonValue),
-    SessionFailed(api::ApiError),
+    SessionFailure(api::ApiError),
+    ListModelsServerSuccess(Vec<api::AppModelDownloadsItem>),
+    ListModelsServerFailure(api::ApiError),
+    ModelDownloadListRefreshPressed,
+    ModelDownloadListSelected(api::AppModelDownloadsItem),
+    ModelDownloadPressed(Option<api::AppModelDownloadsItem>),
     None
 }
 
@@ -225,6 +233,7 @@ impl Application for App {
         }
 
         let record_vec = Vec::new();
+        let model_list_server = Vec::new();
 
         view_state.login_modal_state.show(true);
 
@@ -233,22 +242,20 @@ impl Application for App {
             handle_errors(Err(AppError::NoCuda));
         }
 
-        let command;
+        let mut startup_command_batch = Vec::<Command<Message>>::new();
+        startup_command_batch.push(Command::perform(api::list_models_server(), api::list_models_server_callback));
         if let Some(token) =  session_token.clone() {
-           command = Command::perform(api::check_session(token), api::session_callback);
-        }
-        else {
-            command = Command::none();
+           startup_command_batch.push(Command::perform(api::check_session(token), api::session_callback));
         }
 
         let launch_location = env::current_dir()
-            .map_err(|err| println!("startup directory could not be found: {:?}", err))
+            .map_err(|err| error!("startup directory could not be found: {:?}", err))
             .unwrap_or(PathBuf::from(""));
 
         (
             App {
                 current_directory: launch_location,
-                model_deserializer: ModelDeserializer::new("FAKEYOU_DEVELOPMENT"), // TODO: Real secrets.
+                model_deserializer: ModelDeserializer::new(consts::CRYPTO_SECRET), 
                 hubert,
                 acoustic,
                 hifigan,
@@ -263,8 +270,9 @@ impl Application for App {
                 realtime_recording,
                 realtime_record_sender,
                 record_vec,
+                model_list_server,
             },
-            command
+            Command::batch(startup_command_batch)
         )
     }
 
@@ -278,7 +286,16 @@ impl Application for App {
     }
 
     /// UI setup and state changes
-    fn view(&mut self) -> Element<Message> { view::view(&mut self.view_state, &self.input_device_list_options, &self.output_device_list_options, self.recording, self.realtime_recording) }
+    fn view(&mut self) -> Element<Message> { 
+        view::view(
+            &mut self.view_state,
+            &self.input_device_list_options,
+            &self.output_device_list_options,
+            &self.model_list_server,
+            self.recording,
+            self.realtime_recording
+        )
+    }
 
     /// Respond to messages from the UI with appropriate actions
     fn update(&mut self, msg: Self::Message) -> Command<Self::Message> {
@@ -349,9 +366,20 @@ impl Application for App {
                 }
                 self.realtime_recording = !self.realtime_recording;
             }
+            Message::ModelDownloadListRefreshPressed => {
+                command = Command::perform(api::list_models_server(), api::list_models_server_callback);
+            }
+            Message::ModelDownloadListSelected(sel) => {
+                self.view_state.model_download_list_selected = Some(sel);
+            }
+            Message::ModelDownloadPressed(sel) => {
+                //TODO
+                //command = Command::perform 
+            }
             Message::FakeYouModelBrowsePressed => {
                 match self.handle_fakeyou_model_browse_pressed() {
                     Err(e) => {
+                        error!("{}", e);
                         handle_errors(Err(AppError::FileDialogError(self.current_directory.clone())));
                     }
                     Ok(_) => {}
@@ -601,7 +629,7 @@ impl Application for App {
                 self.view_state.login_modal_state.inner_mut().login_failed = false;
                 self.view_state.login_modal_state.show(false);
             }
-            Message::LoginFailed(e) => {
+            Message::LoginFailure(e) => {
                 self.view_state.login_modal_state.inner_mut().login_err_msg = format!("{}", e);
                 self.view_state.login_modal_state.inner_mut().login_failed = true;
             }
@@ -609,8 +637,14 @@ impl Application for App {
                 self.userdata = Some(user);
                 self.view_state.login_modal_state.show(false);
             }
-            Message::SessionFailed(e) => {
+            Message::SessionFailure(e) => {
                 error!("Error validating session: {}", e);
+            }
+            Message::ListModelsServerSuccess(vec) => {
+                self.model_list_server = vec;
+            }
+            Message::ListModelsServerFailure(e) => {
+                error!("Error listing server models: {}", e);
             }
             Message::None => { }
         }
@@ -653,7 +687,7 @@ impl App {
         match path {
             Ok(Some(p)) => {
                 let model = self.model_deserializer.read_full_model_file(&p)
-                    .map_err(|e| AppError::FileDialogError(model_directory.clone()))?;
+                    .map_err(|e| AppError::ModelLoadError)?;
 
                 let acoustic = self.acoustic.clone();
                 let hifigan = self.hifigan.clone();
@@ -685,12 +719,12 @@ impl App {
                 std::thread::spawn(move || {
                     vad.load(PathBuf::from("./models/silero_vad.jit"))
                 });
+                Ok(())
             },
-            Ok(None) => {},
-            Err(_e) => { /*handle_errors(Err(AppError::FileDialogError(location)));*/ }
+            Ok(None) => {Ok(())},
+            Err(_e) => { Err(AppError::FileDialogError(model_directory)) }
         }
         //FIXME some kind of progress bar while all this crap loads
-        Ok(())
     }
 }
 

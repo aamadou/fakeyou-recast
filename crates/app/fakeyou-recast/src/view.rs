@@ -17,10 +17,13 @@ pub struct ViewState {
     pub hubert_browse_state: button::State,
     pub input_browse_state: button::State,
     pub output_browse_state: button::State,
+    pub download_button_state: button::State,
+    pub model_download_list_refresh_button_state: button::State,
     pub slider_1_state: slider::State,
     pub slider_2_state: slider::State,
     pub input_device_list_state: pick_list::State<String>,
     pub output_device_list_state: pick_list::State<String>,
+    pub model_download_list_state: pick_list::State<crate::api::AppModelDownloadsItem>,
     pub fakeyou_model_browse_selected: Option<PathBuf>,
     pub model_browse_selected: Option<PathBuf>,
     pub hifigan_browse_selected: Option<PathBuf>,
@@ -29,6 +32,7 @@ pub struct ViewState {
     pub input_device_list_selected: Option<String>,
     pub output_device_list_selected: Option<String>,
     pub output_browse_selected: Option<PathBuf>,
+    pub model_download_list_selected: Option<crate::api::AppModelDownloadsItem>,
     pub slider_1_value: f32,
     pub slider_2_value: f32,
     pub show_debug: bool,
@@ -53,9 +57,32 @@ impl ViewState{
         view_state
     }
 }
-pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a Vec<String>, output_device_list_options: &'a Vec<String>, recording: bool, realtime_recording: bool) -> Element<'a, Message> {
+pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a Vec<String>, output_device_list_options: &'a Vec<String>, model_download_list_options: &'a Vec<crate::api::AppModelDownloadsItem>, recording: bool, realtime_recording: bool) -> Element<'a, Message> {
     let empty_pathbuf = PathBuf::from("");
 
+    // Model Downloads
+    let mut model_download_elems: Vec<Element<Message>> = vec![];
+    model_download_elems
+        .push(Text::new("Downloadable Models: ").into());
+    model_download_elems.push(
+        PickList::new(
+            &mut view_state.model_download_list_state,
+            model_download_list_options,
+            view_state.model_download_list_selected.clone(),
+            Message::ModelDownloadListSelected,
+        ).into()
+    );
+    model_download_elems.push(
+        Button::new(&mut view_state.model_download_list_refresh_button_state, Text::new("Refresh"))
+            .on_press(Message::ModelDownloadListRefreshPressed)
+        .into()
+    );
+    model_download_elems.push(
+        Button::new(&mut view_state.download_button_state, Text::new("Download"))
+            .on_press(Message::ModelDownloadPressed(view_state.model_download_list_selected.clone())
+        )
+    .into());
+    
     // NB: New model selection
     let mut fakeyou_model_selection_col_elems: Vec<Element<Message>> = vec![];
     let selected_fakeyou_model_str = if view_state.fakeyou_model_browse_selected.is_none() { "no file selected" } else {view_state.fakeyou_model_browse_selected.as_ref().unwrap_or(&empty_pathbuf).file_stem().unwrap_or_default().to_str().unwrap_or_default() };
@@ -196,7 +223,6 @@ pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a V
                         .font(iced::Font::External { name: "Fira Sans Regular", bytes: &style::NONBOLD_FONT})
                         .width(Length::Units(186))
                         .height(Length::Units(14))
-
                         .size(14)
                         .color(Color::from_rgba8(191, 134, 138, 1.0))
                 )
