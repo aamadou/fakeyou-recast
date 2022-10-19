@@ -1,7 +1,6 @@
 // launch as a gui app on windows without a command prompt
 #![windows_subsystem = "windows"]
 
-use anyhow::anyhow;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{SampleRate, BufferSize, SampleFormat};
 use iced::{executor, Application, Element, Command, Settings, window::{self, Icon}, Subscription, keyboard::{self, KeyCode}};
@@ -14,16 +13,18 @@ use rubato::{FftFixedInOut, Resampler};
 use std::{path::PathBuf, env, io::Write};
 use thiserror::Error;
 
-mod view;
+mod api;
 mod audio;
+mod consts;
+mod discord;
 mod softvc;
 mod vad;
-mod consts;
-mod api;
+mod view;
 
-use softvc::Model;
 use audio::DeviceType;
 use consts::*;
+use crate::discord::spawn_discord_thread;
+use softvc::Model;
 
 #[derive(Error, Debug)]
 pub enum AppError {
@@ -66,6 +67,9 @@ const ICON: &[u8; 262144] = include_bytes!("../../../../assets/icon.data");
 
 pub fn main() -> iced::Result {
     let _ = init_logging(); //nowhere to log an error if one happens here
+
+    spawn_discord_thread();
+
     let settings = Settings {
         window: window::Settings {
             size: (WINDOW_WIDTH, WINDOW_HEIGHT),
@@ -622,7 +626,7 @@ impl Application for App {
 }
 
 impl App {
-    fn handle_fakeyou_model_browse_pressed(&mut self) -> anyhow::Result<()> {
+    fn handle_fakeyou_model_browse_pressed(&mut self) -> Result<(), AppError> {
         let mut model_directory = self.current_directory.clone();
         model_directory.push("models");
 
@@ -634,7 +638,7 @@ impl App {
         match path {
             Ok(Some(p)) => {
                 let model = self.model_serializer.read_full_model_file(&p)
-                    .map_err(|e| anyhow!("Could not load model file"))?;
+                    .map_err(|e| AppError::FileDialogError(model_directory.clone()))?;
 
                 let acoustic = self.acoustic.clone();
                 let hifigan = self.hifigan.clone();
