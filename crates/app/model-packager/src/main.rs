@@ -1,5 +1,5 @@
 use anyhow::{anyhow, bail};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, TimeZone, Utc};
 use clap::Parser;
 use model_serialization::hydrated_model::FullyHydratedModel;
 use model_serialization::model_serializer::ModelSerializer;
@@ -80,18 +80,15 @@ fn main() -> anyhow::Result<()> {
     let created_at = match &args.created_at {
         Some(created_at) => DateTime::parse_from_rfc3339(created_at)
             .map_err(|e| anyhow!("could not parse created_at timestamp: {:?}", e))?
-            .naive_utc()
-            .timestamp_millis(),
+            .naive_utc(),
         None => Utc::now()
-            .naive_utc()
-            .timestamp_millis(),
+            .naive_utc(),
     };
 
     let updated_at = match &args.updated_at {
         Some(created_at) => DateTime::parse_from_rfc3339(created_at)
             .map_err(|e| anyhow!("could not parse updated_at timestamp: {:?}", e))?
-            .naive_utc()
-            .timestamp_millis(),
+            .naive_utc(),
         None => created_at,
     };
 
@@ -100,17 +97,20 @@ fn main() -> anyhow::Result<()> {
     if let Some(expires) = &args.expires_at {
         expires_at = Some(DateTime::parse_from_rfc3339(expires)
             .map_err(|e| anyhow!("could not parse updated_at timestamp: {:?}", e))?
-            .naive_utc()
-            .timestamp_millis());
+            .naive_utc());
     }
 
     if let Some(expires_in_days) = args.expires_in_days {
         let days = Duration::days(expires_in_days);
         expires_at = Some(Utc::now()
             .naive_utc()
-            .add(days)
-            .timestamp_millis());
+            .add(days));
     }
+
+
+    let created_at = Utc.from_utc_datetime(&created_at);
+    let updated_at = Utc.from_utc_datetime(&updated_at);
+    let expires_at = expires_at.map(|naive| Utc.from_utc_datetime(&naive));
 
     let acoustic_file = PathBuf::from(args.acoustic_file);
     let vocoder_file = PathBuf::from(args.vocoder_file);
@@ -134,9 +134,12 @@ fn main() -> anyhow::Result<()> {
         model_name: args.model_name,
         model_author_username: args.author_username,
         model_version: None,
-        model_created_at: Some(created_at.unsigned_abs()),
-        model_updated_at: Some(updated_at.unsigned_abs()),
-        expiry_timestamp_millis: expires_at.map(|t| t.unsigned_abs()),
+        model_created_at: Some(created_at),
+        model_updated_at: Some(updated_at),
+        maybe_model_expires_at: expires_at,
+        maybe_model_invalid_before: None,
+        paid_plan_can_bypass_expiry: Some(true),
+        maybe_model_password: None,
         model_pipeline_version: 1,
         acoustic_model_bytes: acoustic_file_bytes,
         vocoder_model_bytes: vocoder_file_bytes,

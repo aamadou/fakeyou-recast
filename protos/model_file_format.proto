@@ -19,12 +19,26 @@ message UnencryptedLightweightDetails {
 
 message EncryptedLightweightDetails {
   // Authoritative timestamp of when the model file expires.
+  // Timestamp is in seconds since the epoch.
   // Optional in the case of non-expiring model files.
-  optional uint64 expiry_timestamp_millis = 1;
+  optional uint64 expiry_timestamp = 1;
 
-  // If set, this prevents people from rewinding their clock
-  // too far into the past.
-  optional uint64 invalid_before_timestamp_millis = 2;
+  // If set, this prevents people from rewinding their clock too far into the past.
+  // Timestamp is in seconds since the epoch.
+  // Optional in the case of non-expiring model files.
+  optional uint64 invalid_before_timestamp = 2;
+
+  // If there's a model expiration date (in the past or future),
+  // can a paid plan bypass that? (Some models will have this set
+  // to false for an always-on self destruction.)
+  // Optional.
+  optional bool paid_plan_can_bypass_expiry = 3;
+
+  // Some models may have a short string password blocking their use.
+  // This lets us easily share certain protected models without
+  // server-based auth.
+  // Optional.
+  optional string maybe_model_password = 4;
 
   // Extra entropy data to add to the encrypted portion.
   optional bytes entropy_padding = 100;

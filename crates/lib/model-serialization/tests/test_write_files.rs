@@ -8,6 +8,7 @@ use prost::Message;
 use prost::bytes::BytesMut;
 use std::io::{BufReader, Cursor, Read};
 use std::path::PathBuf;
+use chrono::{DateTime, Utc};
 use tempfile::NamedTempFile;
 
 const PRETEND_ENCRYPTION_SECRET : &'static str = "TESTS_ARE_GREAT";
@@ -49,10 +50,14 @@ fn test_write_proto_round_trip() -> anyhow::Result<()> {
             model_author_username: "Vegito".to_string(),
 
             model_version: Some("1.0".to_string()),
-            model_created_at: Some(100),
-            model_updated_at: Some(200),
+            model_created_at: Some(date("2022-09-01T01:02:03Z")),
+            model_updated_at: Some(date("2022-10-17T04:04:00Z")),
 
-            expiry_timestamp_millis: Some(1000),
+            maybe_model_invalid_before: Some(date("2000-01-01T10:00:00Z")),
+            maybe_model_expires_at: Some(date("2024-12-30T12:00:00Z")),
+
+            paid_plan_can_bypass_expiry: Some(true),
+            maybe_model_password: Some("secret_model_password".to_string()),
 
             model_pipeline_version: 1,
             acoustic_model_bytes: "AAAA".repeat(1000).as_bytes().to_vec(),
@@ -71,13 +76,24 @@ fn test_write_proto_round_trip() -> anyhow::Result<()> {
     assert_eq!(model.model_author_username, "Vegito".to_string());
 
     assert_eq!(model.model_version, Some("1.0".to_string()));
-    assert_eq!(model.model_created_at, Some(100));
-    assert_eq!(model.model_updated_at, Some(200));
+    assert_eq!(model.model_created_at, Some(date("2022-09-01T01:02:03Z")));
+    assert_eq!(model.model_updated_at, Some(date("2022-10-17T04:04:00Z")));
 
-    assert_eq!(model.expiry_timestamp_millis, Some(1000));
+    assert_eq!(model.maybe_model_invalid_before, Some(date("2000-01-01T10:00:00Z")));
+    assert_eq!(model.maybe_model_expires_at, Some(date("2024-12-30T12:00:00Z")));
+
+    assert_eq!(model.paid_plan_can_bypass_expiry, Some(true));
+    assert_eq!(model.maybe_model_password, Some("secret_model_password".to_string()));
+
     assert_eq!(model.model_pipeline_version, 1);
     assert!(model.acoustic_model_bytes.starts_with("AAAA".as_bytes()));
     assert!(model.vocoder_model_bytes.starts_with("VVVV".as_bytes()));
 
     Ok(())
+}
+
+fn date(timestamp: &str) -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339(timestamp)
+        .unwrap()
+        .with_timezone(&Utc)
 }

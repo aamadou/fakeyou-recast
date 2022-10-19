@@ -1,3 +1,4 @@
+use chrono::{DateTime, NaiveDateTime, Utc};
 use model_serialization::model_serializer::ModelSerializer;
 
 const PRETEND_ENCRYPTION_SECRET : &'static str = "FAKE_SECRET";
@@ -41,9 +42,11 @@ fn test_read_model_encrypted_metadata() {
     assert_eq!(hydrated.model_token, "vcm_ABCDEF012345".to_string());
     assert_eq!(hydrated.model_name, "Bill Nye (sad)".to_string());
 
-    assert_eq!(hydrated.model_created_at, Some(1665976472411));
-    assert_eq!(hydrated.model_updated_at, Some(1665976472411));
-    assert_eq!(hydrated.expiry_timestamp_millis, Some(1668568472411));
+    assert_eq!(hydrated.model_created_at, Some(date("2022-10-19T04:18:14Z")));
+    assert_eq!(hydrated.model_updated_at, Some(date("2022-10-19T04:18:14Z")));
+    assert_eq!(hydrated.maybe_model_expires_at, Some(date("2022-11-18T04:18:14Z")));
+    assert_eq!(hydrated.maybe_model_invalid_before, None);
+    assert_eq!(hydrated.paid_plan_can_bypass_expiry, Some(true));
 }
 
 #[test]
@@ -57,11 +60,20 @@ fn test_read_full_model_file() {
     assert_eq!(hydrated.model_token, "vcm_ABCDEF012345".to_string());
     assert_eq!(hydrated.model_name, "Bill Nye (sad)".to_string());
 
-    assert_eq!(hydrated.model_created_at, Some(1665976472411));
-    assert_eq!(hydrated.model_updated_at, Some(1665976472411));
-    assert_eq!(hydrated.expiry_timestamp_millis, Some(1668568472411));
+    assert_eq!(hydrated.model_created_at, Some(date("2022-10-19T04:18:14Z")));
+    assert_eq!(hydrated.model_updated_at, Some(date("2022-10-19T04:18:14Z")));
+    assert_eq!(hydrated.maybe_model_expires_at, Some(date("2022-11-18T04:18:14Z")));
+    assert_eq!(hydrated.maybe_model_invalid_before, None);
+    assert_eq!(hydrated.paid_plan_can_bypass_expiry, Some(true));
 
     assert_eq!(hydrated.model_pipeline_version, 1);
     assert!(hydrated.acoustic_model_bytes.starts_with("AAAA".as_bytes()));
     assert!(hydrated.vocoder_model_bytes.starts_with("VVVV".as_bytes()));
+}
+
+
+fn date(timestamp: &str) -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339(timestamp)
+        .unwrap()
+        .with_timezone(&Utc)
 }
