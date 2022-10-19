@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 
 /// Decoded model file with no decryption.
 /// The fastest processing pass we can take.
@@ -19,10 +20,19 @@ pub struct HydratedModelFullMetadata {
     pub model_author_username: String,
 
     pub model_version: Option<String>,
-    pub model_created_at: Option<u64>,
-    pub model_updated_at: Option<u64>,
+    pub model_created_at: Option<DateTime<Utc>>,
+    pub model_updated_at: Option<DateTime<Utc>>,
 
-    pub expiry_timestamp_millis: Option<u64>,
+    pub maybe_model_invalid_before: Option<DateTime<Utc>>,
+    pub maybe_model_expires_at: Option<DateTime<Utc>>,
+
+    /// If there's a model expiration date (in the past or future), can paid plans bypass this
+    /// for the given model? (Some models we may always want to have self-destruct.)
+    pub paid_plan_can_bypass_expiry: Option<bool>,
+
+    /// Some models may have a short string password blocking their use. This lets us easily share
+    /// certain protected models without server-based authentication.
+    pub maybe_model_password: Option<String>,
 
     // TODO: Future fields - model creation time, model details, etc.
 }
@@ -39,10 +49,19 @@ pub struct FullyHydratedModel {
     pub model_author_username: String,
 
     pub model_version: Option<String>,
-    pub model_created_at: Option<u64>,
-    pub model_updated_at: Option<u64>,
+    pub model_created_at: Option<DateTime<Utc>>,
+    pub model_updated_at: Option<DateTime<Utc>>,
 
-    pub expiry_timestamp_millis: Option<u64>,
+    pub maybe_model_invalid_before: Option<DateTime<Utc>>,
+    pub maybe_model_expires_at: Option<DateTime<Utc>>,
+
+    /// If there's a model expiration date (in the past or future), can paid plans bypass this
+    /// for the given model? (Some models we may always want to have self-destruct.)
+    pub paid_plan_can_bypass_expiry: Option<bool>,
+
+    /// Some models may have a short string password blocking their use. This lets us easily share
+    /// certain protected models without server-based authentication.
+    pub maybe_model_password: Option<String>,
 
     /// Changes how the pipeline executes.
     ///  Current supported versions:

@@ -5,6 +5,7 @@ use crate::model_file::{EncryptedHeavyProtoPayloadBytes, EncryptedLightweightPro
 use crate::protos::EncryptedHeavyPayload;
 use crate::protos::EncryptedLightweightDetails;
 use crate::protos::UnencryptedLightweightDetails;
+use crate::time::{maybe_timestamp_to_utc_datetime, utc_datetime_to_timestamp};
 use magic_crypt::generic_array::typenum::U256;
 use magic_crypt::new_magic_crypt;
 use magic_crypt::{MagicCryptTrait, MagicCrypt256};
@@ -72,6 +73,11 @@ impl ModelSerializer {
         let decrypted_details_proto = self.decrypt_and_hydrate_encrypted_details_proto(
             &model_file_payload.encrypted_lightweight_proto_payload_bytes)?;
 
+        let model_created_at = maybe_timestamp_to_utc_datetime(unencrypted_details_proto.model_created_at);
+        let model_updated_at = maybe_timestamp_to_utc_datetime(unencrypted_details_proto.model_updated_at);
+        let maybe_model_invalid_before = maybe_timestamp_to_utc_datetime(decrypted_details_proto.invalid_before_timestamp);
+        let maybe_model_expires_at = maybe_timestamp_to_utc_datetime(decrypted_details_proto.expiry_timestamp);
+
         Ok(HydratedModelFullMetadata {
             file_format_version: model_file_payload.fast_metadata.file_format_version,
             model_token: model_file_payload.fast_metadata.model_token,
@@ -79,10 +85,13 @@ impl ModelSerializer {
             model_author_username: model_file_payload.fast_metadata.model_author_username,
 
             model_version: unencrypted_details_proto.model_version,
-            model_created_at: unencrypted_details_proto.model_created_at,
-            model_updated_at: unencrypted_details_proto.model_updated_at,
+            model_created_at,
+            model_updated_at,
 
-            expiry_timestamp_millis: decrypted_details_proto.expiry_timestamp_millis,
+            maybe_model_invalid_before,
+            maybe_model_expires_at,
+            paid_plan_can_bypass_expiry: decrypted_details_proto.paid_plan_can_bypass_expiry,
+            maybe_model_password: decrypted_details_proto.maybe_model_password,
         })
     }
 
@@ -99,6 +108,11 @@ impl ModelSerializer {
         let decrypted_details_proto = self.decrypt_and_hydrate_encrypted_details_proto(
             &model_file_payload.encrypted_lightweight_proto_payload_bytes)?;
 
+        let model_created_at = maybe_timestamp_to_utc_datetime(unencrypted_details_proto.model_created_at);
+        let model_updated_at = maybe_timestamp_to_utc_datetime(unencrypted_details_proto.model_updated_at);
+        let maybe_model_invalid_before = maybe_timestamp_to_utc_datetime(decrypted_details_proto.invalid_before_timestamp);
+        let maybe_model_expires_at = maybe_timestamp_to_utc_datetime(decrypted_details_proto.expiry_timestamp);
+
         let decrypted_heavy_proto = match model_file_payload.encrypted_heavy_proto_payload_bytes.bytes {
             None => return Err(anyhow!("unexpected payload (1)")),
             Some(ref bytes) => {
@@ -114,10 +128,13 @@ impl ModelSerializer {
             model_author_username: model_file_payload.fast_metadata.model_author_username,
 
             model_version: unencrypted_details_proto.model_version,
-            model_created_at: unencrypted_details_proto.model_created_at,
-            model_updated_at: unencrypted_details_proto.model_updated_at,
+            model_created_at,
+            model_updated_at,
 
-            expiry_timestamp_millis: decrypted_details_proto.expiry_timestamp_millis,
+            maybe_model_invalid_before,
+            maybe_model_expires_at,
+            paid_plan_can_bypass_expiry: decrypted_details_proto.paid_plan_can_bypass_expiry,
+            maybe_model_password: decrypted_details_proto.maybe_model_password,
 
             model_pipeline_version: decrypted_heavy_proto.model_pipeline_version.ok_or(anyhow!("no version"))?,
             acoustic_model_bytes: decrypted_heavy_proto.acoustic_bytes.ok_or(anyhow!("no model (1)"))?,
@@ -131,8 +148,12 @@ impl ModelSerializer {
         let unencrypted_lightweight_proto_bytes = {
             let mut model_proto = UnencryptedLightweightDetails::default();
             model_proto.model_version = model.model_version;
-            model_proto.model_created_at = model.model_created_at;
-            model_proto.model_updated_at = model.model_updated_at;
+
+            model_proto.model_created_at = model.model_created_at
+                .map(|datetime| utc_datetime_to_timestamp(datetime));
+
+            model_proto.model_updated_at = model.model_updated_at
+                .map(|datetime| utc_datetime_to_timestamp(datetime));
 
             let proto_bytes = Self::encode_proto_to_bytes(model_proto)?;
             proto_bytes
@@ -140,7 +161,15 @@ impl ModelSerializer {
 
         let encrypted_lightweight_proto_bytes = {
             let mut model_proto = EncryptedLightweightDetails::default();
-            model_proto.expiry_timestamp_millis = model.expiry_timestamp_millis;
+
+            model_proto.expiry_timestamp = model.maybe_model_expires_at
+                .map(|datetime| utc_datetime_to_timestamp(datetime));
+
+            model_proto.invalid_before_timestamp = model.maybe_model_invalid_before
+                .map(|datetime| utc_datetime_to_timestamp(datetime));
+
+            model_proto.paid_plan_can_bypass_expiry = model.paid_plan_can_bypass_expiry;
+            model_proto.maybe_model_password = model.maybe_model_password;
 
             // TODO: Entropy
 

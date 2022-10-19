@@ -1968,6 +1968,7 @@ dependencies = [
  "anyhow",
  "bincode",
  "bytes",
+ "chrono",
  "magic-crypt",
  "prost",
  "prost-build",

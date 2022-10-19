@@ -18,6 +18,7 @@ pub (crate) mod protos {
 }
 
 pub (crate) mod model_file;
+pub (crate) mod time;
 
 pub mod hydrated_model;
 pub mod model_serializer;
