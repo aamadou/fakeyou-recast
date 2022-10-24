@@ -23,7 +23,7 @@ mod view;
 
 use audio::DeviceType;
 use consts::*;
-use crate::discord::spawn_discord_thread;
+use discord::spawn_discord_thread;
 use softvc::Model;
 use async_controllers::{api, local};
 
@@ -67,8 +67,6 @@ pub enum AppError {
     ResamplerConstructionError(#[from] rubato::ResamplerConstructionError),
     #[error("Resampling failed:\n{0}")]
     ResampleError(#[from] rubato::ResampleError),
-    #[error("Failed to list models in the local model directory {0}.\nEnsure the directory exists and contains valid models")]
-    ModelListError(std::path::PathBuf),
 }
 
 
@@ -152,6 +150,7 @@ struct App {
     realtime_recording: bool,
     record_vec: Vec<f32>,
     model_list_server: Vec<api::AppModelDownloadsItem>,
+    model_list_local: Vec<local::LocalModelListItem>,
 }
 
 //FIXME find a way to have lifetimes in this so we can have references to pick list items
@@ -186,6 +185,11 @@ pub enum Message {
     ModelDownloadListRefreshPressed,
     ModelDownloadListSelected(api::AppModelDownloadsItem),
     ModelDownloadPressed(Option<api::AppModelDownloadsItem>),
+    ListModelsLocalSuccess(Vec<local::LocalModelListItem>),
+    ListModelsLocalFailure(local::LocalError),
+    LocalModelRefreshPressed,
+    LocalModelListSelected(local::LocalModelListItem),
+    LocalModelLoadPressed(Option<local::LocalModelListItem>),
     None
 }
 
@@ -237,6 +241,7 @@ impl Application for App {
 
         let record_vec = Vec::new();
         let model_list_server = Vec::new();
+        let model_list_local = Vec::new();
 
         view_state.login_modal_state.show(true);
 
@@ -245,15 +250,23 @@ impl Application for App {
             handle_errors(Err(AppError::NoCuda));
         }
 
+        let launch_location = env::current_dir()
+            .map_err(|err| error!("startup directory could not be found: {:?}", err))
+            .unwrap_or(PathBuf::from(""));
+
+        let mut model_directory = launch_location.clone();
+        model_directory.push("models");
+
+        view_state.login_modal_state.show(true);
+
         let mut startup_command_batch = Vec::<Command<Message>>::new();
         startup_command_batch.push(Command::perform(api::list_models_server(), api::list_models_server_callback));
+        startup_command_batch.push(Command::perform(local::list_models_local(model_directory), local::list_models_local_callback));
         if let Some(token) =  session_token.clone() {
            startup_command_batch.push(Command::perform(api::check_session(token), api::session_callback));
         }
 
-        let launch_location = env::current_dir()
-            .map_err(|err| error!("startup directory could not be found: {:?}", err))
-            .unwrap_or(PathBuf::from(""));
+        tch::maybe_init_cuda();
 
         (
             App {
@@ -274,6 +287,7 @@ impl Application for App {
                 realtime_record_sender,
                 record_vec,
                 model_list_server,
+                model_list_local,
             },
             Command::batch(startup_command_batch)
         )
@@ -295,6 +309,7 @@ impl Application for App {
             &self.input_device_list_options,
             &self.output_device_list_options,
             &self.model_list_server,
+            &self.model_list_local,
             self.recording,
             self.realtime_recording
         )
@@ -306,7 +321,6 @@ impl Application for App {
         match msg {
             Message::ShowDebugPressed => {
                 self.view_state.show_debug = !self.view_state.show_debug;
-                command = Command::perform(local::list_models_local(PathBuf::from("./models")), local::list_models_local_callback)
             }
             Message::Slider1Changed(new_value) => {
                 self.view_state.slider_1_value = new_value;
@@ -369,16 +383,6 @@ impl Application for App {
                     }
                 }
                 self.realtime_recording = !self.realtime_recording;
-            }
-            Message::ModelDownloadListRefreshPressed => {
-                command = Command::perform(api::list_models_server(), api::list_models_server_callback);
-            }
-            Message::ModelDownloadListSelected(sel) => {
-                self.view_state.model_download_list_selected = Some(sel);
-            }
-            Message::ModelDownloadPressed(sel) => {
-                //TODO
-                //command = Command::perform 
             }
             Message::FakeYouModelBrowsePressed => {
                 match self.handle_fakeyou_model_browse_pressed() {
@@ -650,6 +654,28 @@ impl Application for App {
             Message::ListModelsServerFailure(e) => {
                 error!("Error listing server models: {}", e);
             }
+            Message::ModelDownloadListSelected(sel) => {
+                self.view_state.model_download_list_selected = Some(sel);
+            }
+            Message::ModelDownloadListRefreshPressed => {
+                command = Command::perform(api::list_models_server(), api::list_models_server_callback);
+            }
+            Message::ModelDownloadPressed(sel) => {
+                todo!()
+            }
+            Message::ListModelsLocalSuccess(vec) => {
+                self.model_list_local = vec;
+            },
+            Message::ListModelsLocalFailure(e) => {
+                error!("Error listing local models: {}", e);
+            }
+            Message::LocalModelListSelected(sel) => self.view_state.local_model_list_selected = Some(sel),
+            Message::LocalModelRefreshPressed => {
+                let mut model_directory = self.current_directory.clone();
+                model_directory.push("models");
+                command = Command::perform(local::list_models_local(model_directory), local::list_models_local_callback);
+            },
+            Message::LocalModelLoadPressed(_) => todo!(),
             Message::None => { }
         }
         command
