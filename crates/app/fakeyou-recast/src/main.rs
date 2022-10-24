@@ -13,7 +13,7 @@ use rubato::{FftFixedInOut, Resampler};
 use std::{path::PathBuf, env, io::Write};
 use thiserror::Error;
 
-mod api;
+mod async_controllers;
 mod audio;
 mod consts;
 mod discord;
@@ -25,6 +25,7 @@ use audio::DeviceType;
 use consts::*;
 use crate::discord::spawn_discord_thread;
 use softvc::Model;
+use async_controllers::{api, local};
 
 #[derive(Error, Debug)]
 pub enum AppError {
@@ -65,7 +66,9 @@ pub enum AppError {
     #[error("Resampler construction failed:\n{0}")]
     ResamplerConstructionError(#[from] rubato::ResamplerConstructionError),
     #[error("Resampling failed:\n{0}")]
-    ResampleError(#[from] rubato::ResampleError)
+    ResampleError(#[from] rubato::ResampleError),
+    #[error("Failed to list models in the local model directory {0}.\nEnsure the directory exists and contains valid models")]
+    ModelListError(std::path::PathBuf),
 }
 
 
@@ -303,6 +306,7 @@ impl Application for App {
         match msg {
             Message::ShowDebugPressed => {
                 self.view_state.show_debug = !self.view_state.show_debug;
+                command = Command::perform(local::list_models_local(PathBuf::from("./models")), local::list_models_local_callback)
             }
             Message::Slider1Changed(new_value) => {
                 self.view_state.slider_1_value = new_value;
