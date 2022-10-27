@@ -1,4 +1,3 @@
-use anyhow::anyhow;
 use crate::file_format::crypto::Crypto;
 use crate::file_format::model_file_layout::{BINCODE_CONFIG, EncryptedLightweightProtoPayloadBytes, FILE_HEADER_MAGIC_BYTES, ModelFileIntermediateReadPayload, ModelFilePayload, ModelFileQuickReadPayload, UnencryptedProtoPayloadBytes};
 use crate::file_format::protos::decode_proto_from_bytes;
@@ -6,6 +5,7 @@ use crate::model::{Model, ModelFullMetadata, ModelLightMetadata};
 use crate::protos::EncryptedHeavyPayload;
 use crate::protos::EncryptedLightweightDetails;
 use crate::protos::UnencryptedLightweightDetails;
+use crate::serde::errors::DeserializerError;
 use crate::serde::time::maybe_timestamp_to_utc_datetime;
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -23,7 +23,7 @@ impl ModelDeserializer {
         }
     }
 
-    pub fn read_fast_model_file_metadata<P>(&self, filename: P) -> anyhow::Result<ModelLightMetadata>
+    pub fn read_fast_model_file_metadata<P>(&self, filename: P) -> Result<ModelLightMetadata, DeserializerError>
         where P: AsRef<Path>
     {
         let mut reader = Self::open_model_file_reader_checking_magic_bytes(filename)?;
@@ -43,7 +43,7 @@ impl ModelDeserializer {
         })
     }
 
-    pub fn read_encrypted_model_file_metadata<P>(&self, filename: P) -> anyhow::Result<ModelFullMetadata>
+    pub fn read_encrypted_model_file_metadata<P>(&self, filename: P) -> Result<ModelFullMetadata, DeserializerError>
         where P: AsRef<Path>
     {
         let mut reader = Self::open_model_file_reader_checking_magic_bytes(filename)?;
@@ -82,7 +82,7 @@ impl ModelDeserializer {
         })
     }
 
-    pub fn read_full_model_file<P>(&self, filename: P) -> anyhow::Result<Model>
+    pub fn read_full_model_file<P>(&self, filename: P) -> Result<Model, DeserializerError>
         where P: AsRef<Path> {
 
         let reader = Self::open_model_file_reader_checking_magic_bytes(filename)?;
@@ -101,7 +101,7 @@ impl ModelDeserializer {
         let maybe_model_expires_at = maybe_timestamp_to_utc_datetime(decrypted_details_proto.expiry_timestamp);
 
         let decrypted_heavy_proto = match model_file_payload.encrypted_heavy_proto_payload_bytes.bytes {
-            None => return Err(anyhow!("unexpected payload (1)")),
+            None => return Err(DeserializerError::UnexpectedPayload),
             Some(ref bytes) => {
                 let decrypted_bytes = self.crypto.decrypt_bytes(bytes)?;
                 decode_proto_from_bytes::<EncryptedHeavyPayload>(&decrypted_bytes)?
@@ -123,13 +123,15 @@ impl ModelDeserializer {
             paid_plan_can_bypass_expiry: decrypted_details_proto.paid_plan_can_bypass_expiry,
             maybe_model_password: decrypted_details_proto.maybe_model_password,
 
-            model_pipeline_version: decrypted_heavy_proto.model_pipeline_version.ok_or(anyhow!("no version"))?,
-            acoustic_model_bytes: decrypted_heavy_proto.acoustic_bytes.ok_or(anyhow!("no model (1)"))?,
-            vocoder_model_bytes: decrypted_heavy_proto.vocoder_bytes.ok_or(anyhow!("no model (2)"))?,
+            model_pipeline_version: decrypted_heavy_proto.model_pipeline_version.ok_or(DeserializerError::InvalidVersion)?,
+            acoustic_model_bytes: decrypted_heavy_proto.acoustic_bytes.ok_or(DeserializerError::AbsentAcousticModel)?,
+            vocoder_model_bytes: decrypted_heavy_proto.vocoder_bytes.ok_or(DeserializerError::AbsentVocoderModel)?,
         })
     }
 
-    fn open_model_file_reader_checking_magic_bytes<P>(filename: P) -> anyhow::Result<BufReader<File>> where P: AsRef<Path> {
+    fn open_model_file_reader_checking_magic_bytes<P>(filename: P) -> Result<BufReader<File>, DeserializerError>
+        where P: AsRef<Path>
+    {
         let file = File::open(&filename)?;
         let mut reader = BufReader::new(file);
 
@@ -138,31 +140,31 @@ impl ModelDeserializer {
         Ok(reader)
     }
 
-    fn check_starting_magic_bytes(reader: &mut BufReader<File>) -> anyhow::Result<()> {
+    fn check_starting_magic_bytes(reader: &mut BufReader<File>) -> Result<(), DeserializerError> {
         let mut magic_bytes_buffer : [u8; 8] = [0, 0, 0, 0, 0, 0, 0, 0];
         reader.read_exact(&mut magic_bytes_buffer)?;
 
         if magic_bytes_buffer != FILE_HEADER_MAGIC_BYTES.as_bytes() {
-            return Err(anyhow!("magic bytes do not match"));
+            return Err(DeserializerError::InvalidMagicBytes);
         }
         Ok(())
     }
 
-    fn hydrate_unencrypted_details_proto(&self, unencrypted_proto_payload: &UnencryptedProtoPayloadBytes) -> anyhow::Result<UnencryptedLightweightDetails> {
+    fn hydrate_unencrypted_details_proto(&self, unencrypted_proto_payload: &UnencryptedProtoPayloadBytes) -> Result<UnencryptedLightweightDetails, DeserializerError> {
         match unencrypted_proto_payload.bytes {
-            None => return Err(anyhow!("unexpected payload (1)")),
+            None => return Err(DeserializerError::UnexpectedPayload),
             Some(ref bytes) => {
-                decode_proto_from_bytes::<UnencryptedLightweightDetails>(bytes)
+                Ok(decode_proto_from_bytes::<UnencryptedLightweightDetails>(bytes)?)
             }
         }
     }
 
-    fn decrypt_and_hydrate_encrypted_details_proto(&self, encrypted_lightweight_proto_payload: &EncryptedLightweightProtoPayloadBytes) -> anyhow::Result<EncryptedLightweightDetails> {
+    fn decrypt_and_hydrate_encrypted_details_proto(&self, encrypted_lightweight_proto_payload: &EncryptedLightweightProtoPayloadBytes) -> Result<EncryptedLightweightDetails, DeserializerError> {
         match encrypted_lightweight_proto_payload.bytes {
-            None => return Err(anyhow!("unexpected payload (1)")),
+            None => return Err(DeserializerError::UnexpectedPayload),
             Some(ref bytes) => {
                 let decrypted_bytes = self.crypto.decrypt_bytes(bytes)?;
-                decode_proto_from_bytes::<EncryptedLightweightDetails>(&decrypted_bytes)
+                Ok(decode_proto_from_bytes::<EncryptedLightweightDetails>(&decrypted_bytes)?)
             }
         }
     }

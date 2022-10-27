@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use model_serde::serde::deserializer::ModelDeserializer;
+use model_serde::serde::errors::DeserializerError;
 
 const PRETEND_ENCRYPTION_SECRET : &'static str = "FAKE_SECRET";
 
@@ -7,16 +8,21 @@ const PRETEND_ENCRYPTION_SECRET : &'static str = "FAKE_SECRET";
 fn test_read_empty_file() {
     let deserializer = ModelDeserializer::new(PRETEND_ENCRYPTION_SECRET);
     let result = deserializer.read_fast_model_file_metadata("tests/files/empty_file.txt");
-    assert!(result.is_err());
-    assert_eq!(result.unwrap_err().to_string(), "failed to fill whole buffer".to_string());
+    match result {
+        Err(DeserializerError::IOError(_)) => {}, // This error is what we expect
+        _ => panic!("expected IO error"),
+    }
 }
 
 #[test]
 fn test_read_invalid_magic_bytes() {
     let deserializer = ModelDeserializer::new(PRETEND_ENCRYPTION_SECRET);
     let result = deserializer.read_fast_model_file_metadata("tests/files/small_file.txt");
-    assert!(result.is_err());
-    assert_eq!(result.unwrap_err().to_string(), "magic bytes do not match".to_string());
+
+    match result {
+        Err(DeserializerError::InvalidMagicBytes) => {}, // This error is what we expect
+        _ => panic!("expected invalid magic bytes error"),
+    }
 }
 
 #[test]
