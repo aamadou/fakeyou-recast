@@ -17,8 +17,7 @@ pub (crate) mod protos {
     include!(concat!(env!("OUT_DIR"), "/model_file_format.rs"));
 }
 
-pub (crate) mod model_file;
-pub (crate) mod time;
+pub (crate) mod file_format;
 
-pub mod hydrated_model;
-pub mod model_serializer;
+pub mod model;
+pub mod serde;

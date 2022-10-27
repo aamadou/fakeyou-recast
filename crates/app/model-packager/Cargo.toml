@@ -6,7 +6,7 @@ publish = false
 
 [dependencies]
 
-model-serialization = { path = "../../lib/model-serialization" }
+model-serde = { path = "../../lib/model-serde" }
 
 anyhow = "1.0.65"
 chrono = "0.4.22"

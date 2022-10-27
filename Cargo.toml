@@ -5,7 +5,7 @@ resolver = "2"
 
 members = [
     # Shared library crates
-    "crates/lib/model-serialization",
+    "crates/lib/model-serde",
 
     # Application crates
     "crates/app/fakeyou-recast",

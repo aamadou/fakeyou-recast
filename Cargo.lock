@@ -1008,7 +1008,7 @@ dependencies = [
  "iced_native",
  "json",
  "log",
- "model-serialization",
+ "model-serde",
  "native-dialog",
  "reqwest",
  "ringbuf",
@@ -1958,11 +1958,11 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
- "model-serialization",
+ "model-serde",
 ]
 
 [[package]]
-name = "model-serialization"
+name = "model-serde"
 version = "0.1.0"
 dependencies = [
  "anyhow",

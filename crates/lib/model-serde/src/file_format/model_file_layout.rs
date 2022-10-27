@@ -1,7 +1,17 @@
 //! Do not change the contents of this file without careful attention.
 //! Make sure to write tests for format changes.
 
+use bincode::config::{Configuration, Fixint, LittleEndian};
 use bincode::{Decode, Encode};
+
+/// All of our model files begin with the "FAKEYOU{NULL_BYTE}" magic bytes.
+pub(crate) const FILE_HEADER_MAGIC_BYTES : &'static str = "FAKEYOU\0";
+
+// NB: Do not change without taking care, as this controls our model file format.
+pub(crate) const BINCODE_CONFIG : Configuration<LittleEndian, Fixint> = bincode::config::standard()
+    .with_little_endian()
+    .with_fixed_int_encoding()
+    .write_fixed_array_length();
 
 /// With the exception of the "inner_payload_bytes", everything here is expected to be read quickly.
 #[derive(Encode, Decode, PartialEq, Debug)]

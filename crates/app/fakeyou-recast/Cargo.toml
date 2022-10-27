@@ -8,7 +8,7 @@ resolver = "2"
 
 [dependencies]
 
-model-serialization = { path = "../../lib/model-serialization" }
+model-serde = { path = "../../lib/model-serde" }
 
 chrono = "0.4.22"
 cpal = "0.14.0"

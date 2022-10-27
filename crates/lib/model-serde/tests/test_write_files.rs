@@ -1,29 +1,24 @@
-use std::fs::File;
-use magic_crypt::generic_array::typenum::U256;
-use magic_crypt::new_magic_crypt;
-use magic_crypt::{MagicCryptTrait, MagicCrypt256};
-use model_serialization::hydrated_model::FullyHydratedModel;
-use model_serialization::model_serializer::ModelSerializer;
-use prost::Message;
-use prost::bytes::BytesMut;
-use std::io::{BufReader, Cursor, Read};
-use std::path::PathBuf;
 use chrono::{DateTime, Utc};
+use model_serde::model::Model;
+use model_serde::serde::deserializer::ModelDeserializer;
+use model_serde::serde::serializer::ModelSerializer;
+use std::fs::File;
+use std::io::{BufReader, Read};
 use tempfile::NamedTempFile;
 
 const PRETEND_ENCRYPTION_SECRET : &'static str = "TESTS_ARE_GREAT";
 
 #[test]
 fn test_write_file_magic_bytes() -> anyhow::Result<()> {
-    let mut file = NamedTempFile::new()?;
+    let file = NamedTempFile::new()?;
     let filename = file.path();
 
     let serializer = ModelSerializer::new(PRETEND_ENCRYPTION_SECRET);
 
-    let model = FullyHydratedModel::default();
+    let model = Model::default();
     serializer.write_model_to_file(model, true, filename).unwrap();
 
-    let mut file = File::open(filename)?;
+    let file = File::open(filename)?;
     let mut reader = BufReader::new(file);
 
     let mut buffer = vec![0; 8];
@@ -36,14 +31,15 @@ fn test_write_file_magic_bytes() -> anyhow::Result<()> {
 
 #[test]
 fn test_write_proto_round_trip() -> anyhow::Result<()> {
-    let mut file = NamedTempFile::new()?;
+    let file = NamedTempFile::new()?;
     let filename = file.path();
 
     let serializer = ModelSerializer::new(PRETEND_ENCRYPTION_SECRET);
+    let deserializer = ModelDeserializer::new(PRETEND_ENCRYPTION_SECRET);
 
     // Write file
     {
-        let model = FullyHydratedModel {
+        let model = Model {
             file_format_version: "1.0.0".to_string(),
             model_token: "vcm_WRITTEN_MODEL".to_string(),
             model_name: "Bob Ross (angry)".to_string(),
@@ -68,7 +64,7 @@ fn test_write_proto_round_trip() -> anyhow::Result<()> {
     }
 
     // Verify written contents
-    let model = serializer.read_full_model_file(filename).unwrap();
+    let model = deserializer.read_full_model_file(filename).unwrap();
 
     assert_eq!(model.file_format_version, "1.0.0".to_string());
     assert_eq!(model.model_token, "vcm_WRITTEN_MODEL".to_string());

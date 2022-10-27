@@ -1,0 +1,19 @@
+use bytes::BytesMut;
+use prost::Message;
+
+pub fn encode_proto_to_bytes<T>(proto: T) -> anyhow::Result<BytesMut>
+    where T : Message
+{
+    let mut buffer = BytesMut::with_capacity(1024);
+    proto.encode(&mut buffer)?;
+    Ok(buffer)
+}
+
+pub fn decode_proto_from_bytes<T>(bytes: &[u8]) -> anyhow::Result<T>
+    where T: Message + Default
+{
+    // TODO: What's the cost here? Is the iterator read twice, and if so, can we reduce to one read?
+    let bytes_mut = BytesMut::from_iter(bytes.iter());
+    let decoded_proto = T::decode(bytes_mut)?;
+    Ok(decoded_proto)
+}
