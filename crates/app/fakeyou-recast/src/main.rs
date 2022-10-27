@@ -6,7 +6,7 @@ use cpal::{BufferSize, SampleFormat};
 use iced::{executor, Application, Element, Command, Settings, window::{self, Icon}, Subscription, keyboard::{self, KeyCode}};
 use iced_native::{event, subscription, Event};
 use log::{info, debug,  warn, error};
-use model_serialization::model_serializer::ModelSerializer;
+use model_serde::serde::deserializer::ModelDeserializer;
 use native_dialog::{FileDialog, MessageDialog};
 use ringbuf::RingBuffer;
 use rubato::{FftFixedInOut, Resampler};
@@ -129,7 +129,7 @@ struct App {
     /// Directory the application is launched from / running in.
     current_directory: PathBuf,
     /// Utility that handles model file loading and decryption.
-    model_serializer: ModelSerializer,
+    model_deserializer: ModelDeserializer,
     hubert: softvc::Hubert,
     acoustic: softvc::Acoustic,
     hifigan: softvc::Hifigan,
@@ -241,7 +241,7 @@ impl Application for App {
         (
             App {
                 current_directory: launch_location,
-                model_serializer: ModelSerializer::new("FAKEYOU_DEVELOPMENT"), // TODO: Real secrets.
+                model_deserializer: ModelDeserializer::new("FAKEYOU_DEVELOPMENT"), // TODO: Real secrets.
                 hubert,
                 acoustic,
                 hifigan,
@@ -641,7 +641,7 @@ impl App {
 
         match path {
             Ok(Some(p)) => {
-                let model = self.model_serializer.read_full_model_file(&p)
+                let model = self.model_deserializer.read_full_model_file(&p)
                     .map_err(|e| AppError::FileDialogError(model_directory.clone()))?;
 
                 let acoustic = self.acoustic.clone();

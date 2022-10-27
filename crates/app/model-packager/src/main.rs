@@ -1,12 +1,12 @@
 use anyhow::{anyhow, bail};
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use clap::Parser;
-use model_serialization::hydrated_model::FullyHydratedModel;
-use model_serialization::model_serializer::ModelSerializer;
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::ops::Add;
 use std::path::{Path, PathBuf};
+use model_serde::model::Model;
+use model_serde::serde::serializer::ModelSerializer;
 
 /// Package FakeYou realtime voice conversion models
 #[derive(Parser, Debug)]
@@ -128,7 +128,7 @@ fn main() -> anyhow::Result<()> {
 
     let serializer = ModelSerializer::new(&args.crypto_secret);
 
-    let model = FullyHydratedModel {
+    let model = Model {
         file_format_version: "1.0.0".to_string(),
         model_token: args.model_token,
         model_name: args.model_name,

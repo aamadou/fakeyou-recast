@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 /// Decoded model file with no decryption.
 /// The fastest processing pass we can take.
 #[derive(Default, Clone, Debug, PartialEq, Eq)]
-pub struct HydratedModelLightMetadata {
+pub struct ModelLightMetadata {
     pub file_format_version: String,
     pub model_token: String,
     pub model_name: String,
@@ -13,7 +13,7 @@ pub struct HydratedModelLightMetadata {
 /// Decoded model file with metadata fields decrypted.
 /// Faster than a full model file read and decrypt pass.
 #[derive(Default, Clone, Debug, PartialEq, Eq)]
-pub struct HydratedModelFullMetadata {
+pub struct ModelFullMetadata {
     pub file_format_version: String,
     pub model_token: String,
     pub model_name: String,
@@ -42,7 +42,7 @@ pub struct HydratedModelFullMetadata {
 /// This takes longer to read in, hydrate, and decrypt, so should not be used for enumerating a
 /// directory's contents.
 #[derive(Default, Clone, Debug, PartialEq, Eq)]
-pub struct FullyHydratedModel {
+pub struct Model {
     pub file_format_version: String,
     pub model_token: String,
     pub model_name: String,
