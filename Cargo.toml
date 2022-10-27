@@ -1,8 +1,5 @@
 [workspace]
 
-# NB: wgpu blows up without this resolver, and it must be set at the workspace root rather than leaf projects.
-resolver = "2"
-
 members = [
     # Shared library crates
     "crates/lib/model-serde",
@@ -11,3 +8,10 @@ members = [
     "crates/app/fakeyou-recast",
     "crates/app/model-packager",
 ]
+
+# Settings that must be set at the workspace level rather than leaf projects:
+
+resolver = "2" # NB: wgpu blows up without this resolver.
+
+[profile.release]
+strip = true # NB: Strip debugging symbols to make reverse engineering harder
