@@ -1,5 +1,5 @@
 use magic_crypt::generic_array::typenum::U256;
-use magic_crypt::{MagicCrypt256, MagicCryptTrait, new_magic_crypt};
+use magic_crypt::{MagicCrypt256, MagicCryptError, MagicCryptTrait, new_magic_crypt};
 use std::io::Cursor;
 
 /// Handle model encryption and decryption with a single string secret.
@@ -14,14 +14,14 @@ impl Crypto {
         }
     }
 
-    pub fn encrypt_bytes(&self, unencrypted_bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
+    pub fn encrypt_bytes(&self, unencrypted_bytes: &[u8]) -> Result<Vec<u8>, MagicCryptError> {
         let mut reader = Cursor::new(unencrypted_bytes);
         let mut encrypted_bytes = Vec::new();
         self.crypt.encrypt_reader_to_writer2::<U256>(&mut reader, &mut encrypted_bytes)?;
         Ok(encrypted_bytes)
     }
 
-    pub fn decrypt_bytes(&self, encrypted_bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
+    pub fn decrypt_bytes(&self, encrypted_bytes: &[u8]) -> Result<Vec<u8>, MagicCryptError> {
         let decrypted_bytes = self.crypt.decrypt_bytes_to_bytes(&encrypted_bytes)?;
         Ok(decrypted_bytes)
     }

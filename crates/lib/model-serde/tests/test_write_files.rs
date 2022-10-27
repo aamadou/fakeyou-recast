@@ -9,8 +9,8 @@ use tempfile::NamedTempFile;
 const PRETEND_ENCRYPTION_SECRET : &'static str = "TESTS_ARE_GREAT";
 
 #[test]
-fn test_write_file_magic_bytes() -> anyhow::Result<()> {
-    let file = NamedTempFile::new()?;
+fn test_write_file_magic_bytes() {
+    let file = NamedTempFile::new().unwrap();
     let filename = file.path();
 
     let serializer = ModelSerializer::new(PRETEND_ENCRYPTION_SECRET);
@@ -18,20 +18,18 @@ fn test_write_file_magic_bytes() -> anyhow::Result<()> {
     let model = Model::default();
     serializer.write_model_to_file(model, true, filename).unwrap();
 
-    let file = File::open(filename)?;
+    let file = File::open(filename).unwrap();
     let mut reader = BufReader::new(file);
 
     let mut buffer = vec![0; 8];
-    reader.read_exact(&mut buffer)?;
+    reader.read_exact(&mut buffer).unwrap();
 
     assert_eq!(buffer, "FAKEYOU\0".as_bytes());
-
-    Ok(())
 }
 
 #[test]
-fn test_write_proto_round_trip() -> anyhow::Result<()> {
-    let file = NamedTempFile::new()?;
+fn test_write_proto_round_trip() {
+    let file = NamedTempFile::new().unwrap();
     let filename = file.path();
 
     let serializer = ModelSerializer::new(PRETEND_ENCRYPTION_SECRET);
@@ -84,8 +82,6 @@ fn test_write_proto_round_trip() -> anyhow::Result<()> {
     assert_eq!(model.model_pipeline_version, 1);
     assert!(model.acoustic_model_bytes.starts_with("AAAA".as_bytes()));
     assert!(model.vocoder_model_bytes.starts_with("VVVV".as_bytes()));
-
-    Ok(())
 }
 
 fn date(timestamp: &str) -> DateTime<Utc> {

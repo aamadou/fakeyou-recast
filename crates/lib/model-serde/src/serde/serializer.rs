@@ -5,6 +5,7 @@ use crate::model::Model;
 use crate::protos::EncryptedHeavyPayload;
 use crate::protos::EncryptedLightweightDetails;
 use crate::protos::UnencryptedLightweightDetails;
+use crate::serde::errors::SerializerError;
 use crate::serde::time::utc_datetime_to_timestamp;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -22,7 +23,7 @@ impl ModelSerializer {
         }
     }
 
-    pub fn write_model_to_file<P>(&self, model: Model, replace_file: bool, filename: P) -> anyhow::Result<()>
+    pub fn write_model_to_file<P>(&self, model: Model, replace_file: bool, filename: P) -> Result<(), SerializerError>
         where P: AsRef<Path>
     {
         let unencrypted_lightweight_proto_bytes = {
