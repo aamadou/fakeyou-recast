@@ -32,6 +32,8 @@ pub enum AppError {
     NoDevice(&'static str),
     #[error("No {0} file selected")]
     NoFile(&'static str),
+    #[error("No CUDA-capable GPU detected. For best results, use an Nvidia GPU.\nSwitching to CPU inference.")]
+    NoCuda,
     #[error("{0}")]
     StreamConfigError(#[source] cpal::DefaultStreamConfigError),
     #[error("The input stream could not be constructed.\nInput Device must support FLOAT or PCM S16LE with a buffer size of {1}")]
@@ -225,6 +227,9 @@ impl Application for App {
         view_state.login_modal_state.show(true);
 
         tch::maybe_init_cuda();
+        if !tch::Cuda::is_available() {
+            handle_errors(Err(AppError::NoCuda));
+        }
 
         let command;
         if let Some(token) =  session_token.clone() {
