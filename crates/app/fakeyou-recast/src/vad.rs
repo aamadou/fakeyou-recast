@@ -11,7 +11,7 @@ impl Model for Vad {
 
 impl Vad {
     pub fn forward(&self, samples: &[f32]) -> Result<tch::Tensor, AppError> {
-        let tensor = tch::Tensor::of_slice(&samples).unsqueeze(0).to(tch::Device::Cuda(0));
+        let tensor = tch::Tensor::of_slice(&samples).unsqueeze(0).to(tch::Device::cuda_if_available());
         let model = self.0.try_lock().map_err(|_e| AppError::LockError)?;
         let output = tch::no_grad(|| {
             model.as_ref().ok_or(AppError::NoModel)?.forward_is(&[IValue::Tensor(tensor), IValue::Int(MODEL_SAMPLE_RATE as i64)]).map_err(|_e| AppError::ModelError(_e))

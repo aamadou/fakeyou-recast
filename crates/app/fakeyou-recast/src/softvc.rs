@@ -9,8 +9,7 @@ pub type ModelArc = Arc<Mutex<Option<CModule>>>;
 pub trait Model {
     fn load(&self, path: PathBuf) -> Result <(), AppError> {
         let mut lock = self.get_inner().try_lock().map_err(|_e| AppError::LockError)?;
-        let mut inner_model = CModule::load(path).map_err(|_e| AppError::ModelLoadError)?;
-        inner_model.to(tch::Device::Cuda(0), tch::Kind::Float, false);
+        let mut inner_model = CModule::load_on_device(path, tch::Device::cuda_if_available()).map_err(|_e| AppError::ModelLoadError)?;
         inner_model.set_eval();
         *lock = Some(inner_model);
         Ok(())
@@ -23,8 +22,7 @@ pub trait Model {
 
     fn load_readable<T: std::io::Read>(&self, model_bytes: &mut T) -> Result<(), AppError> {
         let mut lock = self.get_inner().try_lock().map_err(|_e| AppError::LockError)?;
-        let mut inner_model = CModule::load_data(model_bytes).map_err(|_e| AppError::ModelLoadError)?;
-        inner_model.to(tch::Device::Cuda(0), tch::Kind::Float, false);
+        let mut inner_model = CModule::load_data_on_device(model_bytes, tch::Device::cuda_if_available()).map_err(|_e| AppError::ModelLoadError)?;
         inner_model.set_eval();
         *lock = Some(inner_model);
         Ok(())
@@ -42,7 +40,7 @@ impl Model for Hubert {
 
 impl Hubert {
     pub fn forward(&self, samples: &[f32]) -> Result<tch::Tensor, AppError> {
-        let tensor = Tensor::of_slice(&samples).unsqueeze(0).unsqueeze(0).to(tch::Device::Cuda(0));
+        let tensor = Tensor::of_slice(&samples).unsqueeze(0).unsqueeze(0).to(tch::Device::cuda_if_available());
         let model = self.0.try_lock().map_err(|_e| AppError::LockError)?;
         model.as_ref().ok_or(AppError::NoModel)?.method_ts("units", &[tensor]).map_err(|_e| AppError::ModelError(_e))
     }
