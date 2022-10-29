@@ -86,7 +86,7 @@ pub fn main() -> iced::Result {
             ..Default::default()
         },
         default_font: Some(&view::style::BOLD_FONT),
-        default_text_size: 18,
+        default_text_size: 14,
         ..Default::default()
     };
     App::run(settings)
