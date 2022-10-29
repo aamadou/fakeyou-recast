@@ -431,7 +431,7 @@ pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a V
         .push(Space::with_height(Length::Units(20)))
         .push(Container::new(
                 Text::new("FakeYou Recast v1.0").size(12).color(Color::from_rgba8(255, 255, 255, 0.30))
-                .font(iced::Font::External { name: "Fira Sans Regular", bytes: &style::NONBOLD_FONT})
+                .font(iced::Font::External { name: "Fira Sans SemiBold", bytes: &style::BOLD_FONT})
         ).width(Length::Fill).center_x())
     ).style(style::MainButtonContainer).width(Length::Fill).height(Length::Units(130)).align_y(Vertical::Bottom).padding(28);
 
