@@ -77,7 +77,9 @@ pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a V
             view_state.model_download_list_selected.clone(),
             Message::ModelDownloadListSelected,
         )
+        .padding(8)
         .style(style::PickList)
+        .font(iced::Font::External { name: "Fira Sans Regular", bytes: &style::NONBOLD_FONT})
         .width(Length::Units(350))
     ).push(
         Button::new(&mut view_state.model_download_list_refresh_button_state, 
@@ -85,6 +87,7 @@ pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a V
                 .horizontal_alignment(Horizontal::Center)
                 .vertical_alignment(Vertical::Center))
             .style(style::Button::Grey)
+            .height(Length::Units(35))
             .width(Length::Units(90))
             .on_press(Message::ModelDownloadListRefreshPressed)
     )
@@ -93,6 +96,7 @@ pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a V
             .horizontal_alignment(Horizontal::Center)
             .vertical_alignment(Vertical::Center))
         .style(style::Button::Grey)
+        .height(Length::Units(35))
         .width(Length::Units(90))
 
         .on_press(Message::ModelDownloadPressed(view_state.model_download_list_selected.clone()))
@@ -110,7 +114,9 @@ pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a V
             view_state.local_model_list_selected.clone(),
             Message::LocalModelListSelected,
         )
+        .padding(8)
         .style(style::PickList)
+        .font(iced::Font::External { name: "Fira Sans Regular", bytes: &style::NONBOLD_FONT})
         .width(Length::Units(350))
     )
     .push(
@@ -118,6 +124,7 @@ pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a V
                 .horizontal_alignment(Horizontal::Center)
                 .vertical_alignment(Vertical::Center))
             .style(style::Button::Grey)
+            .height(Length::Units(35))
             .width(Length::Units(90))
             .on_press(Message::LocalModelRefreshPressed)
     )
@@ -126,6 +133,7 @@ pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a V
                 .horizontal_alignment(Horizontal::Center)
                 .vertical_alignment(Vertical::Center))
             .style(style::Button::Grey)
+            .height(Length::Units(35))
             .width(Length::Units(90))
             .on_press(Message::LocalModelLoadPressed(view_state.local_model_list_selected.clone()))
     ).into());
@@ -335,6 +343,7 @@ pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a V
                         )
                         .placeholder("Default Input Device")
                         .style(style::PickList)
+                        .padding(8)
                         .font(iced::Font::External { name: "Fira Sans Regular", bytes: &style::NONBOLD_FONT})
                         .width(Length::Units(262))
                     )
@@ -361,6 +370,7 @@ pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a V
                         )
                         .placeholder("Default Output Device")
                         .style(style::PickList)
+                        .padding(8)
                         .font(iced::Font::External { name: "Fira Sans Regular", bytes: &style::NONBOLD_FONT})
                         .width(Length::Units(262))
                     )
