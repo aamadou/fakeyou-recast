@@ -3,7 +3,7 @@
 
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{BufferSize, SampleFormat};
-use iced::{executor, Application, Element, Command, Settings, window::{self, Icon}, Subscription, keyboard::{self, KeyCode}, Color};
+use iced::{executor, Application, Element, Command, Settings, window::{self, Icon}, Subscription, keyboard::{self, KeyCode}, Color, time};
 use iced_native::{event, subscription, Event};
 use log::{info, debug,  warn, error};
 use model_serde::serde::deserializer::ModelDeserializer;
@@ -20,6 +20,7 @@ mod discord;
 mod softvc;
 mod vad;
 mod view;
+mod spinner;
 
 use audio::DeviceType;
 use consts::*;
@@ -155,6 +156,7 @@ struct App {
     cpu_mode: bool,
     offline_mode: bool,
     record_vec: RecordVector,
+    spinner_frames: Vec<Vec<u8>>
 }
 
 #[derive(Debug, Clone)]
@@ -208,7 +210,8 @@ pub enum Message {
     LoginFailed(ApiError),
     SessionValid(json::JsonValue),
     SessionFailed(ApiError),
-    None
+    SpinnerNextFrame(std::time::Instant),
+    Done
 }
 
 fn handle_errors(res: Result<(), AppError>) -> Message {
@@ -216,7 +219,7 @@ fn handle_errors(res: Result<(), AppError>) -> Message {
         error!("{}", e);
         MessageDialog::new().set_type(native_dialog::MessageType::Error).set_title("FakeYou Recast Error").set_text(&format!("{}", e)).show_alert().unwrap();
     }
-    Message::None
+    Message::Done
 }
 
 fn handle_recording(res: Result<Vec<f32>, AppError>) -> Message {
@@ -227,7 +230,7 @@ fn handle_recording(res: Result<Vec<f32>, AppError>) -> Message {
         let record_vec = res.unwrap();
         return Message::RecordingFinished(record_vec);
     }
-    Message::None
+    Message::Done
 }
 
 impl Application for App {
@@ -255,6 +258,39 @@ impl Application for App {
         output_device_list_options.insert(0, String::from("To file"));
         let mut cpu_mode = false;
         let offline_mode = false;
+
+        let spinner_frames = vec![
+            spinner::FRAME1.to_vec(),
+            spinner::FRAME2.to_vec(),
+            spinner::FRAME3.to_vec(),
+            spinner::FRAME4.to_vec(),
+            spinner::FRAME5.to_vec(),
+            spinner::FRAME6.to_vec(),
+            spinner::FRAME7.to_vec(),
+            spinner::FRAME8.to_vec(),
+            spinner::FRAME9.to_vec(),
+            spinner::FRAME10.to_vec(),
+            spinner::FRAME11.to_vec(),
+            spinner::FRAME12.to_vec(),
+            spinner::FRAME13.to_vec(),
+            spinner::FRAME14.to_vec(),
+            spinner::FRAME15.to_vec(),
+            spinner::FRAME16.to_vec(),
+            spinner::FRAME17.to_vec(),
+            spinner::FRAME18.to_vec(),
+            spinner::FRAME19.to_vec(),
+            spinner::FRAME20.to_vec(),
+            spinner::FRAME21.to_vec(),
+            spinner::FRAME22.to_vec(),
+            spinner::FRAME23.to_vec(),
+            spinner::FRAME24.to_vec(),
+            spinner::FRAME25.to_vec(),
+            spinner::FRAME26.to_vec(),
+            spinner::FRAME27.to_vec(),
+            spinner::FRAME28.to_vec(),
+            spinner::FRAME29.to_vec(),
+            spinner::FRAME30.to_vec(),
+        ];
 
 
         let mut session_token = None;
@@ -309,6 +345,7 @@ impl Application for App {
                 record_vec,
                 cpu_mode,
                 offline_mode,
+                spinner_frames,
             },
             command
         )
@@ -363,6 +400,7 @@ impl Application for App {
                         }
                     }
                 } else {
+                    self.view_state.show_spinner = true;
                     let (realtime_record_sender, realtime_record_receiver) = std::sync::mpsc::channel();
                     self.realtime_record_sender = Some(realtime_record_sender);
 
@@ -447,6 +485,8 @@ impl Application for App {
                         Err(_e) => { handle_errors(Err(AppError::FileDialogError(location))); }
                     }
                     //FIXME some kind of progress bar while all this crap loads
+                    // I need to change these functions to async instead of this
+                    // random thread crap to be able to tell when they're finished
                 }
             }
             Message::HifiganBrowsePressed => { 
@@ -542,6 +582,7 @@ impl Application for App {
                         self.recording = !self.recording;
                     }
                 } else {
+                    self.view_state.show_spinner = true;
                     let (record_sender, record_receiver) = std::sync::mpsc::channel();
                     self.record_sender = Some(record_sender);
                     let input_file = self.view_state.input_browse_selected.clone();
@@ -574,6 +615,7 @@ impl Application for App {
                 } else {
                     let (play_target_sender, play_target_receiver) = std::sync::mpsc::channel();
                     self.play_target_sender = Some(play_target_sender);
+                    self.view_state.show_spinner = true;
 
                     let output_device_name = self.view_state.output_device_list_selected.clone();
                     let output_file = self.view_state.output_browse_selected.clone();
@@ -609,6 +651,8 @@ impl Application for App {
                 } else {
                     let (play_source_sender, play_source_receiver) = std::sync::mpsc::channel();
                     self.play_source_sender = Some(play_source_sender);
+                    self.view_state.show_spinner = true;
+                    let output_device_name = self.view_state.output_device_list_selected.clone();
 
                     let output_device_name = self.view_state.output_device_list_selected.clone();
 
@@ -637,6 +681,7 @@ impl Application for App {
             }
 
             Message::RecordingFinished(vec) => {
+                self.view_state.show_spinner = false;
                 self.record_vec.set_contents(vec);
             }
             Message::UsernameChanged(username) => {
@@ -678,29 +723,24 @@ impl Application for App {
                     self.offline_mode = true;
                 }
             }
-            Message::None => { }
+            Message::SpinnerNextFrame(_) => {
+               self.view_state.spinner_frame_index = (self.view_state.spinner_frame_index + 1) % 30;
+               self.view_state.spinner_frame = self.spinner_frames[self.view_state.spinner_frame_index as usize].clone();
+            }
+            Message::Done => {
+                self.view_state.show_spinner = false;
+            }
         }
         command
     }
 
-    /// F12 hotkey for secret options
     fn subscription(&self) -> Subscription<Message> {
-        subscription::events_with(|event, status| {
-            if let event::Status::Captured = status {
-                return None;
-            }
-
-            match event {
-                Event::Keyboard(keyboard::Event::KeyPressed {
-                    modifiers: _,
-                    key_code,
-                }) => match key_code {
-                    KeyCode::F12 => Some(Message::ShowDebugPressed),
-                    _ => None,
-                }
-                _ => None,
-            }
-        })
+        if self.view_state.show_spinner {
+            time::every(core::time::Duration::from_millis(33)).map(Message::SpinnerNextFrame)
+        }
+        else {
+            Subscription::none()
+        }
     }
 
 
