@@ -10,7 +10,12 @@ use native_dialog::{FileDialog, MessageDialog};
 use ringbuf::RingBuffer;
 use rubato::{FftFixedInOut, Resampler};
 use std::{path::PathBuf, env, io::Write, sync::{atomic::{AtomicBool, Ordering},  mpsc::{self, TryRecvError}}};
-use thiserror::Error;
+
+use rust_i18n::t;
+use rust_i18n::i18n;
+
+i18n!("../../../assets/locales");
+
 
 mod api;
 mod audio;
@@ -20,6 +25,7 @@ mod softvc;
 mod vad;
 mod view;
 mod spinner;
+mod error;
 
 use audio::DeviceType;
 use consts::*;
@@ -27,48 +33,7 @@ use crate::discord::spawn_discord_thread;
 use softvc::Model;
 use api::ApiError;
 
-#[derive(Error, Debug)]
-pub enum AppError {
-    #[error("The {0} device could not be determined")]
-    NoDevice(&'static str),
-    #[error("No {0} file selected")]
-    NoFile(&'static str),
-    #[error("No CUDA-capable GPU detected. For best results, use an Nvidia GPU.\nSwitching to CPU inference.")]
-    NoCuda,
-    #[error("{0}")]
-    StreamConfigError(#[source] cpal::DefaultStreamConfigError),
-    #[error("The input stream could not be constructed.\nInput Device must support FLOAT or PCM S16LE with a buffer size of {1}")]
-    BuildInputStreamError(#[source] cpal::BuildStreamError, String),
-    #[error("The output stream could not be constructed.\nOutput Device must support FLOAT or PCM S16LE with a buffer size of {1}")]
-    BuildOutputStreamError(#[source] cpal::BuildStreamError, String),
-    #[error("The {0} stream could not be played")]
-    PlayStreamError(&'static str, #[source] cpal::PlayStreamError),
-    #[error("The channel became disconnected.")]
-    ChannelRecvError,
-    #[error("Attempted to send to a channel that had no receiver")]
-    ChannelSendError/*(#[from] std::sync::mpsc::SendError)*/,
-    #[error("IO Error\n{0}")]
-    IoError(#[from] std::io::Error),
-    #[error("Audio format must be PCM S16LE or FLOAT32")]
-    GenericFormatError,
-    #[error("WAV read/write error\n{0}\nWAV files must be PCM S16LE or FLOAT32")]
-    HoundError(#[from] hound::Error),
-    #[error("Attempted to lock a mutex that is already locked")]
-    LockError/*(#[from] std::sync::TryLockError)*/,
-    #[error("Failed to load the model")]
-    ModelLoadError,
-    #[error("No model is loaded")]
-    NoModel,
-    #[error("Inference failed to produce an output")]
-    ModelError(#[from] tch::TchError),
-    #[error("File picker dialog failed to open for path:\n{0}")]
-    FileDialogError(PathBuf),
-    #[error("Resampler construction failed:\n{0}")]
-    ResamplerConstructionError(#[from] rubato::ResamplerConstructionError),
-    #[error("Resampling failed:\n{0}")]
-    ResampleError(#[from] rubato::ResampleError)
-}
-
+pub use error::AppError;
 
 const ICON: &[u8; 262144] = include_bytes!("../../../../assets/icon.data");
 
@@ -216,16 +181,19 @@ pub enum Message {
 fn handle_errors(res: Result<(), AppError>) -> Message {
     if let Some(e) = res.err() {
         error!("{}", e);
-        MessageDialog::new().set_type(native_dialog::MessageType::Error).set_title("FakeYou Recast Error").set_text(&format!("{}", e)).show_alert().unwrap();
+        MessageDialog::new().set_type(native_dialog::MessageType::Error)
+            .set_title((t!("app_name") + t!("misc.error").as_str()).as_str())
+            .set_text(&format!("{}", e)).show_alert().unwrap();
     }
-    info!("done");
     Message::Done
 }
 
 fn handle_recording(res: Result<Vec<f32>, AppError>) -> Message {
     if let Some(e) = res.as_ref().err() {
         error!("{}", e);
-        MessageDialog::new().set_type(native_dialog::MessageType::Error).set_title("FakeYou Recast Error").set_text(&format!("{}", e)).show_alert().unwrap();
+        MessageDialog::new().set_type(native_dialog::MessageType::Error)
+            .set_title((t!("app_name") + t!("misc.error").as_str()).as_str())
+            .set_text(&format!("{}", e)).show_alert().unwrap();
     } else {
         let record_vec = res.unwrap();
         return Message::RecordingFinished(record_vec);
@@ -253,9 +221,9 @@ impl Application for App {
         let playing_source = false;
         let playing_target = false;
         let mut input_device_list_options = audio::get_input_device_list();
-        input_device_list_options.insert(0, String::from("From file"));
+        input_device_list_options.insert(0, t!("main_ui.list_item.from_file"));
         let mut output_device_list_options: Vec<String> = audio::get_output_device_list();
-        output_device_list_options.insert(0, String::from("To file"));
+        output_device_list_options.insert(0, t!("main_ui.list_item.to_file"));
         let mut cpu_mode = false;
         let offline_mode = false;
 
@@ -318,7 +286,7 @@ impl Application for App {
         }
 
         let launch_location = env::current_dir()
-            .map_err(|err| error!("startup directory could not be found: {:?}", err))
+            .map_err(|err| error!("{}", t!("log.error.startup_dir", error = err.to_string().as_str())))
             .unwrap_or(PathBuf::from(""));
 
         (
@@ -353,7 +321,7 @@ impl Application for App {
 
     /// Controls the title bar of the application window
     fn title(&self) -> String {
-        String::from("FakeYou Recast")
+        t!("app_name")
     }
 
     fn background_color(&self) -> Color {
@@ -456,7 +424,7 @@ impl Application for App {
                     .show_open_single_file();
                     match path {
                         Ok(Some(p)) => {
-                            info!("Opening model: {}", p.clone().file_name().unwrap_or_default().to_string_lossy());
+                            info!("{}", t!("opening_model", file =  &p.clone().file_name().unwrap_or_default().to_string_lossy()));
                             let acoustic = self.acoustic.clone();
                             let path = p.clone();
                             // TODO use async instead of threads and handle errors
@@ -547,11 +515,14 @@ impl Application for App {
             }
             Message::InputBrowsePressed => { 
                 let path = FileDialog::new()
-                    .add_filter("WAV audio file", &["wav"])
+                    .add_filter(t!("file_dialog.wav").as_str(), &["wav"])
                     .show_open_single_file();
                 match path {
                     Ok(i) => {
-                        info!("Selected file {} for input", i.clone().unwrap_or_default().file_name().unwrap_or_default().to_string_lossy());
+                        info!("{}", t!("log.info.in_sel_file", 
+                                file = i.clone().unwrap_or_default().file_name().unwrap_or_default().to_str().unwrap_or_default()
+                            )
+                        );
                         self.view_state.input_browse_selected = i;
                     },
                     Err(_e) => { handle_errors(Err(AppError::FileDialogError(PathBuf::from("")))); }
@@ -559,12 +530,15 @@ impl Application for App {
             }
             Message::OutputBrowsePressed => { 
                 let path = FileDialog::new()
-                    .add_filter("WAV audio file", &["wav"])
+                    .add_filter(t!("file_dialog.wav").as_str(), &["wav"])
                     .set_filename("output.wav")
                     .show_save_single_file();
                 match path {
                     Ok(o) => {
-                        info!("Selected file {} for output", o.clone().unwrap_or_default().file_name().unwrap_or_default().to_string_lossy());
+                        info!("{}", t!("log.info.out_sel_file", 
+                                file = o.clone().unwrap_or_default().file_name().unwrap_or_default().to_str().unwrap_or_default()
+                            )
+                        );
                         self.view_state.output_browse_selected = o;
                     },
                     Err(_e) => { handle_errors(Err(AppError::FileDialogError(PathBuf::from("")))); }
@@ -572,7 +546,7 @@ impl Application for App {
             }
             Message::RecordPressed => { 
                 let input_device_name = self.view_state.input_device_list_selected.clone();
-                if self.recording && input_device_name != Some(String::from("From file")) {
+                if self.recording && input_device_name != Some(t!("main_ui.list_item.from_file")) {
                     if self.record_sender.is_some()
                     {
                         let res = self.record_sender.as_ref().unwrap().send((false, self.view_state.slider_1_value.clone()));
@@ -594,7 +568,7 @@ impl Application for App {
                     };
 
                     command = Command::perform(start_recording(input_device, record_receiver), handle_recording); 
-                    if input_device_name != Some(String::from("From file")) && self.record_sender.is_some() {
+                    if input_device_name != Some(t!("main_ui.list_item.from_file")) && self.record_sender.is_some() {
                         let _ = self.record_sender.as_ref().unwrap().send((true, self.view_state.slider_1_value.clone()));
                         self.recording = !self.recording;
                     }
@@ -632,7 +606,7 @@ impl Application for App {
                     };
                     command = Command::perform(play_target(self.record_vec.get_contents(), hubert, acoustic, hifigan, vad, output_device, play_target_receiver), handle_errors);
 
-                    if output_device_name != Some(String::from("To file")) && self.play_target_sender.is_some() {
+                    if output_device_name != Some(t!("main_ui.list_item.to_file")) && self.play_target_sender.is_some() {
                         self.play_target_sender.as_ref().unwrap().send((true, self.view_state.slider_2_value.clone())).unwrap();
                         self.playing_target = !self.playing_target;
                     }
@@ -672,11 +646,11 @@ impl Application for App {
                 }
             }
             Message::InputDeviceChanged(new_device) => {
-                info!("Selected {} for input", new_device);
+                info!("{}", t!("log.info.in_sel_dev", dev = new_device.to_string().as_str()));
                 self.view_state.input_device_list_selected = Some(new_device);
             }
             Message::OutputDeviceChanged(new_device) => {
-                info!("Selected {} for output", new_device);
+                info!("{}", t!("log.info.out_sel_dev", dev = new_device.to_string().as_str()));
                 self.view_state.output_device_list_selected = Some(new_device);
             }
 
@@ -699,7 +673,7 @@ impl Application for App {
             Message::LoginSuccess(token) => {
                 match std::fs::File::create(".sessiontoken") {
                     Ok(mut file) => { let _ = file.write_all(token.as_bytes()); },
-                    Err(e) => { error!("Failed to write the session token to file: {}", e); }
+                    Err(e) => { error!("{}", t!("log.error.write_sess_token", error = e.to_string().as_str())); }
                 }
                 self.offline_mode = false;
                 self.view_state.login_modal_state.inner_mut().login_failed = false;
@@ -718,7 +692,7 @@ impl Application for App {
                 self.view_state.login_modal_state.show(false);
             }
             Message::SessionFailed(e) => {
-                error!("Error validating session: {}", e);
+                error!("{}", t!("log.error.invalid_session", error = e.to_string().as_str()));
                 if e == ApiError::ReqwestError {
                     self.offline_mode = true;
                 }
@@ -811,7 +785,7 @@ impl App {
 /// Realtime record => record and playback at the same time
 async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32, f32)>, input_device: audio::DeviceType, output_device: audio::DeviceType, hubert: softvc::Hubert, acoustic: softvc::Acoustic, hifigan: softvc::Hifigan, vad: vad::Vad) -> Result<(), AppError>
 {
-    info!("Started realtime recording from {} with playback on {}", input_device, output_device);
+    info!("{}", t!("log.info.start_realtime", in = input_device.to_string().as_str(), out = output_device.to_string().as_str()));
     let arc_cancel_token = std::sync::Arc::new(AtomicBool::new(false));
     let cancel_token1 = arc_cancel_token.clone();
     let cancel_token2 = arc_cancel_token.clone();
@@ -821,27 +795,32 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
     let mut cpal_input_device = None;
     match input_device {
         DeviceType::File(_f) => {
-            let _ = MessageDialog::new().set_type(native_dialog::MessageType::Error).set_title("FakeYou Recast Error").set_text("Cannot use files for realtime.").show_alert();
+            let _ = MessageDialog::new().set_type(native_dialog::MessageType::Error)
+                .set_title((t!("app_name") + t!("misc.error").as_str()).as_str())
+                .set_text(t!("log.error.realtime_file").as_str()).show_alert();
         },
         DeviceType::Device(cpal_dev) => {
             cpal_input_device = Some(cpal_dev);
         }
-        DeviceType::None => { Err(AppError::NoDevice("input"))?; }
+        DeviceType::None => { Err(AppError::NoDevice(t!("misc.input")))?; }
     }
 
     let mut cpal_output_device = None;
     match output_device {
         DeviceType::File(_f) => {
-            let _ = MessageDialog::new().set_type(native_dialog::MessageType::Error).set_title("FakeYou Recast Error").set_text("Cannot use files for realtime.").show_alert();
+            let _ = MessageDialog::new().set_type(native_dialog::MessageType::Error)
+                .set_title((t!("app_name") + t!("misc.error").as_str()).as_str())
+                .set_text(t!("log.error.realtime_file").as_str()).show_alert();
+
         },
         DeviceType::Device(cpal_dev) => {
             cpal_output_device = Some(cpal_dev);
         }
-        DeviceType::None => { Err(AppError::NoDevice("output"))?; }
+        DeviceType::None => { Err(AppError::NoDevice(t!("misc.output")))?; }
     }
 
-    let input_config = cpal_input_device.as_ref().ok_or(AppError::NoDevice("input"))?.default_input_config().map_err(|_e| AppError::NoDevice("input"))?;
-    let output_config = cpal_output_device.as_ref().ok_or(AppError::NoDevice("output"))?.default_output_config().map_err(|_e| AppError::NoDevice("output"))?;
+    let input_config = cpal_input_device.as_ref().ok_or(AppError::NoDevice(t!("misc.input")))?.default_input_config().map_err(|_e| AppError::NoDevice(t!("misc.input")))?;
+    let output_config = cpal_output_device.as_ref().ok_or(AppError::NoDevice(t!("misc.output")))?.default_output_config().map_err(|_e| AppError::NoDevice(t!("misc.output")))?;
 
     let in_rate = input_config.sample_rate().0 as usize;
     let in_n_channels = input_config.channels() as usize;
@@ -854,16 +833,14 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
     let in_chunk_size = (0.4 * in_rate as f32 * in_n_channels as f32) as usize; // 400ms
     let out_chunk_size = (0.4 * out_rate as f32 * out_n_channels as f32) as usize; // 400ms
                                                                                    
-    info!("Input configured as: {} channels at {} Hz with format {:?}", in_n_channels, in_rate, in_format);
-    info!("Output configured as: {} channels at {} Hz with format {:?}", out_n_channels, out_rate, out_format);
+    info!("{}", t!("log.info.in_config", ch = in_n_channels.to_string().as_str(), freq = in_rate.to_string().as_str(), format = format!("{:?}", in_format).as_str()));
+    info!("{}", t!("log.info.out_config", ch = out_n_channels.to_string().as_str(), freq = out_rate.to_string().as_str(), format = format!("{:?}", out_format).as_str()));
 
     let mut resampler1 = FftFixedInOut::<f32>::new(in_rate, MODEL_SAMPLE_RATE, (in_chunk_size as f32 / in_n_channels as f32 * MODEL_SAMPLE_RATE as f32 / in_rate as f32) as usize, 1).map_err(|e| AppError::ResamplerConstructionError(e))?;
     let mut resampler1_input_buffer = resampler1.input_buffer_allocate();
     let mut resampler1_output_buffer = resampler1.output_buffer_allocate();
     let resampler1_input_size = resampler1.input_frames_next();
     let resampler1_output_size = resampler1.output_frames_next();
-    debug!("in_n_channels: {}", in_n_channels);
-    debug!("in_rate: {}", in_rate);
     debug!("resampler1_input_size: {}", resampler1_input_size);
     debug!("resampler1_output_size: {}", resampler1_output_size);
     resampler1_input_buffer[0].resize(resampler1_input_size, 0.0);
@@ -873,8 +850,6 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
     let mut resampler2_output_buffer = resampler2.output_buffer_allocate();
     let resampler2_input_size = resampler2.input_frames_next();
     let resampler2_output_size = resampler2.output_frames_next();
-    debug!("out_n_channels: {}", out_n_channels);
-    debug!("out_rate: {}", out_rate);
     debug!("resampler2_input_size: {}", resampler2_input_size);
     debug!("resampler2_output_size: {}", resampler2_output_size);
     resampler2_input_buffer[0].resize(resampler2_input_size, 0.0);
@@ -938,7 +913,7 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
                 let res = resampler1.process_into_buffer(&resampler1_input_buffer, &mut resampler1_output_buffer, None);
                 match res {
                     Ok(_) => {}
-                    Err(e) => { error!("Input resampler error: {}", e) }
+                    Err(e) => { error!("{}", t!("log.error.in_resampler", error = e.to_string().as_str())) }
                 };
 
 
@@ -1000,7 +975,7 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
                         let res = resampler2.process_into_buffer(&resampler2_input_buffer, &mut resampler2_output_buffer, None);
                         match res {
                             Ok(_) => {}
-                            Err(e) => { error!("Output resampler error: {}", e) }
+                            Err(e) => { error!("{}", t!("log.error.out_resampler", error = e.to_string().as_str())) }
                         };
 
                         resampler2_output_buffer[0].iter().for_each(|&sample| {
@@ -1024,8 +999,8 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
         }
     });
 
-    let in_dev = cpal_input_device.ok_or(AppError::NoDevice("input"))?;
-    let out_dev = cpal_output_device.ok_or(AppError::NoDevice("output"))?;
+    let in_dev = cpal_input_device.ok_or(AppError::NoDevice(t!("misc.input")))?;
+    let out_dev = cpal_output_device.ok_or(AppError::NoDevice(t!("misc.output")))?;
 
     let mut input_config = input_config.config();
     input_config.buffer_size = BufferSize::Fixed(in_chunk_size as u32);
@@ -1057,8 +1032,8 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
     }?;
 
 
-    input_stream.play().map_err(|e| AppError::PlayStreamError("input", e))?;
-    output_stream.play().map_err(|e| AppError::PlayStreamError("output", e))?;
+    input_stream.play().map_err(|e| AppError::PlayStreamError(e, t!("misc.input")))?;
+    output_stream.play().map_err(|e| AppError::PlayStreamError(e, t!("misc.output")))?;
     loop {
         if cancel_token2.load(Ordering::Relaxed) {
             break;
@@ -1087,22 +1062,21 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
 
 /// Record to a buffer for later conversion (non-realtime)
 async fn start_recording(input_device: audio::DeviceType, receiver: std::sync::mpsc::Receiver<(bool, f32)>) -> Result<Vec<f32>, AppError> {
-    info!("Recording started from {}", input_device);
+    info!("{}", t!("log.info.started_recording", dev = input_device.to_string().as_str()));
     let vec = audio::record_audio_vec(input_device, receiver)?;
     Ok(vec)
 }
 
 /// Play back the input buffer
 async fn play_source(source: Vec<f32>, output_device: audio::DeviceType, play_source_receiver: mpsc::Receiver<(bool, f32)>) -> Result<(), AppError> {
-    info!("Playing source audio on {}", output_device);
+    info!("{}", t!("log.info.playing_source", dev = output_device.to_string().as_str()));
     debug!("source first 20 samples {:?}", source[0..20].to_vec());
     audio::play_audio_vec(output_device, source, play_source_receiver)
 }
 
 /// Convert and play back the input buffer with the target voice
 async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc::Acoustic, hifigan: softvc::Hifigan, vad: vad::Vad, output_device: audio::DeviceType, play_target_receiver: mpsc::Receiver<(bool, f32)>) -> Result<(), AppError> {
-    //TODO some kind of loading spinner or something while this is happening
-    info!("Running inference and playing target audio on {}", output_device);
+    info!("{}", t!("log.info.playing_target", dev = output_device.to_string().as_str()));
     debug!("first 20 recorded samples: {:?}", source[..20].to_vec());
 
     match output_device {
@@ -1158,7 +1132,7 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
             let out_rate = output_config.sample_rate().0 as usize;
             let n_channels = output_config.channels() as usize;
             let sample_format = output_config.sample_format();
-            info!("Output configured as: {} channels at {} Hz with format {:?}", n_channels, out_rate, sample_format);
+            info!("{}", t!("log.info.out_config", ch = n_channels.to_string().as_str(), out_rate = out_rate.to_string().as_str(), format = format!("{:?}", sample_format).as_str()));
 
             let mut resampler = FftFixedInOut::<f32>::new(MODEL_SAMPLE_RATE, out_rate, OFFLINE_CHUNK_SIZE, 1).map_err(|e| AppError::ResamplerConstructionError(e))?;
             let mut resampler_input_buffer = resampler.input_buffer_allocate();
@@ -1181,7 +1155,7 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
             let cancel_token3 = arc_cancel_token.clone();
 
             std::thread::spawn(move || {
-                'outer: for chunk in source.chunks(resampler_input_size)
+                for chunk in source.chunks(resampler_input_size)
                 {
                     let processing_start_time = std::time::Instant::now();
                     // Find active 50ms chunks with Silero VAD
@@ -1240,7 +1214,7 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
                             .for_each(|(i, o)| *i = o) ;
                         let resampler_res = resampler.process_into_buffer(&resampler_input_buffer, &mut resampler_output_buffer, None);
                         if let Err(e) = resampler_res {
-                            error!("Resampler error: {}", e)
+                           error!("{}", t!("log.error.out_resampler", error = e.to_string().as_str()));
                         }
                         resampler_output_buffer[0].iter().for_each(|&sample| {
                             // mono to stereo etc.
@@ -1288,10 +1262,10 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
         let output_stream = match sample_format
         {
             SampleFormat::F32 => {
-                Ok(d.build_output_stream_raw(&output_config.config(), SampleFormat::F32, output_data_fn, audio::err_fn).map_err(|e| AppError::BuildOutputStreamError(e, String::from("Default")))?)
+                Ok(d.build_output_stream_raw(&output_config.config(), SampleFormat::F32, output_data_fn, audio::err_fn).map_err(|e| AppError::BuildOutputStreamError(e, t!("misc.default")))?)
             }
             SampleFormat::I16 => {
-                Ok(d.build_output_stream_raw(&output_config.config(), SampleFormat::I16, output_data_fn, audio::err_fn).map_err(|e| AppError::BuildOutputStreamError(e, String::from("Default")))?)
+                Ok(d.build_output_stream_raw(&output_config.config(), SampleFormat::I16, output_data_fn, audio::err_fn).map_err(|e| AppError::BuildOutputStreamError(e, t!("misc.default")))?)
             }
             SampleFormat::U16 => {
                 Err(AppError::GenericFormatError)
@@ -1300,7 +1274,7 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
         }?;
 
 
-        output_stream.play().map_err(|e| {error!("Output stream error: {}", e); AppError::PlayStreamError("output", e)})?;
+        output_stream.play().map_err(|e| {error!("{}", t!("log.error.output_stream", error = e.to_string().as_str())); AppError::PlayStreamError(e, t!("misc.output"))})?;
         //add a couple seconds in case we fall behind
         let stop_time = std::time::Instant::now() + core::time::Duration::from_secs_f32(playback_secs + 2.0);
         loop {
@@ -1329,10 +1303,10 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
         core::mem::drop(output_stream);
     }
     DeviceType::None => {
-        Err(AppError::NoDevice("output"))?
+        Err(AppError::NoDevice(t!("misc.output")))?
     }
     }
-    info!("Finished playing target audio");
-    return Ok(())
+    info!("{}", t!("log.info.stopped_play_target"));
+    Ok(())
 }
 
