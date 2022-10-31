@@ -1,4 +1,4 @@
-use std::{fs::File, path::PathBuf};
+use std::{fs::File, path::PathBuf, sync::mpsc::TryRecvError};
 use cpal::{self, SampleFormat, traits::{DeviceTrait, HostTrait, StreamTrait}};
 use crate::AppError;
 use log::{info, error};
@@ -201,14 +201,19 @@ pub fn play_audio_vec(output_device: DeviceType, buf: Vec<f32>, receiver: std::s
             while std::time::Instant::now() < (start_time + core::time::Duration::from_secs_f32(playback_secs)) {
                 // The receiver tells us whether the user pressed stop and the current volume
                 // setting
-                let (playing, ovol) = receiver.recv().map_err(|e| AppError::ChannelRecvError(e))?;
-                    if playing {
-                        //FIXME unsafe
-                        unsafe { unsafe { crate::OUTPUT_VOLUME = ovol } };
-                    } else {
-                        break;
+                match receiver.try_recv() {
+                    Err(TryRecvError::Empty) => {},
+                    Err(TryRecvError::Disconnected) => { Err(AppError::ChannelRecvError)?; }
+                    Ok((playing, ovol)) => {
+                        if playing {
+                            //FIXME unsafe
+                            unsafe { crate::OUTPUT_VOLUME = ovol };
+                        } else {
+                            break;
+                        }
                     }
-                    std::thread::sleep(core::time::Duration::from_millis(50));
+                }
+                std::thread::sleep(core::time::Duration::from_millis(50));
             }
         }
         DeviceType::None => {
@@ -298,7 +303,7 @@ pub fn record_audio_vec(input_device: DeviceType, receiver: std::sync::mpsc::Rec
             let arc1 = arc_vec.clone();
             let arc2 = arc_vec.clone();
 
-            let input_vol = receiver.recv().map_err(|e| AppError::ChannelRecvError(e))?.1;
+            let input_vol = receiver.recv().map_err(|e| AppError::ChannelRecvError)?.1;
             let atomic_vol = AtomicU32::new(input_vol.to_bits());
             let arc_atomic_vol = Arc::new(atomic_vol);
 
@@ -350,13 +355,18 @@ pub fn record_audio_vec(input_device: DeviceType, receiver: std::sync::mpsc::Rec
             input_stream.play().map_err(|e| AppError::PlayStreamError("input", e))?;
 
             loop {
-                let (recording, ivol) = receiver.recv().map_err(|e| AppError::ChannelRecvError(e))?;
-                if recording {
-                    atomic_vol2.store(ivol.to_bits(), std::sync::atomic::Ordering::Relaxed);
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                } else {
-                    info!("Recording stopped");
-                    break;
+                match receiver.try_recv() {
+                    Err(TryRecvError::Empty) => {},
+                    Err(TryRecvError::Disconnected) => { Err(AppError::ChannelRecvError)?; }
+                    Ok((recording, ivol)) => {
+                        if recording {
+                            atomic_vol2.store(ivol.to_bits(), std::sync::atomic::Ordering::Relaxed);
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                        } else {
+                            info!("Recording stopped");
+                            break;
+                        }
+                    }
                 }
             }
             let lock = arc2.try_lock().map_err(|_e| AppError::LockError)?;

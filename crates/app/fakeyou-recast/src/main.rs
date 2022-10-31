@@ -3,14 +3,13 @@
 
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{BufferSize, SampleFormat};
-use iced::{executor, Application, Element, Command, Settings, window::{self, Icon}, Subscription, keyboard::{self, KeyCode}, Color, time};
-use iced_native::{event, subscription, Event};
+use iced::{executor, Application, Element, Command, Settings, window::{self, Icon}, Subscription, Color, time};
 use log::{info, debug,  warn, error};
 use model_serde::serde::deserializer::ModelDeserializer;
 use native_dialog::{FileDialog, MessageDialog};
 use ringbuf::RingBuffer;
 use rubato::{FftFixedInOut, Resampler};
-use std::{path::PathBuf, env, io::Write, sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex, mpsc}};
+use std::{path::PathBuf, env, io::Write, sync::{atomic::{AtomicBool, Ordering},  mpsc::{self, TryRecvError}}};
 use thiserror::Error;
 
 mod api;
@@ -44,8 +43,8 @@ pub enum AppError {
     BuildOutputStreamError(#[source] cpal::BuildStreamError, String),
     #[error("The {0} stream could not be played")]
     PlayStreamError(&'static str, #[source] cpal::PlayStreamError),
-    #[error("Nothing was received from the channel")]
-    ChannelRecvError(#[from] std::sync::mpsc::RecvError),
+    #[error("The channel became disconnected.")]
+    ChannelRecvError,
     #[error("Attempted to send to a channel that had no receiver")]
     ChannelSendError/*(#[from] std::sync::mpsc::SendError)*/,
     #[error("IO Error\n{0}")]
@@ -219,6 +218,7 @@ fn handle_errors(res: Result<(), AppError>) -> Message {
         error!("{}", e);
         MessageDialog::new().set_type(native_dialog::MessageType::Error).set_title("FakeYou Recast Error").set_text(&format!("{}", e)).show_alert().unwrap();
     }
+    info!("done");
     Message::Done
 }
 
@@ -728,6 +728,13 @@ impl Application for App {
                self.view_state.spinner_frame = self.spinner_frames[self.view_state.spinner_frame_index as usize].clone();
             }
             Message::Done => {
+                // set the button text back to normal state
+                self.playing_source = false;
+                self.playing_target = false;
+                self.realtime_recording = false;
+                self.recording = false;
+
+                // stop the spinner
                 self.view_state.show_spinner = false;
             }
         }
@@ -1054,21 +1061,24 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
     output_stream.play().map_err(|e| AppError::PlayStreamError("output", e))?;
     loop {
         if cancel_token2.load(Ordering::Relaxed) {
-            //FIXME set the button text back to realtime instead of leaving it as stop when an
-            //error is encountered.
             break;
         }
 
         // The receiver tells us whether the user pressed stop and the current volume
         // setting
-        let (realtime_recording, ivol, ovol) = realtime_receiver.recv().map_err(|e| AppError::ChannelRecvError(e))?;
-        if realtime_recording {
-            //FIXME unsafe
-            unsafe { INPUT_VOLUME = ivol };
-            unsafe { OUTPUT_VOLUME = ovol };
-        } else {
-            info!("Stopped realtime recording");
-            break;
+        match realtime_receiver.try_recv() {
+            Err(TryRecvError::Empty) => {},
+            Err(TryRecvError::Disconnected) => { Err(AppError::ChannelRecvError)?; }
+            Ok((realtime_recording, ivol, ovol)) => {
+                if realtime_recording {
+                    //FIXME unsafe
+                    unsafe { INPUT_VOLUME = ivol };
+                    unsafe { OUTPUT_VOLUME = ovol };
+                } else {
+                    info!("Stopped realtime recording");
+                    break;
+                }
+            }
         }
     }
     cancel_token4.store(true, Ordering::Relaxed);
@@ -1171,7 +1181,7 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
             let cancel_token3 = arc_cancel_token.clone();
 
             std::thread::spawn(move || {
-                for chunk in source.chunks(resampler_input_size)
+                'outer: for chunk in source.chunks(resampler_input_size)
                 {
                     let processing_start_time = std::time::Instant::now();
                     // Find active 50ms chunks with Silero VAD
@@ -1300,23 +1310,29 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
 
             // The receiver tells us whether the user pressed stop and the current volume
             // setting
-            let (playing_target, ovol) = play_target_receiver.recv().map_err(|e| AppError::ChannelRecvError(e))?;
-            if playing_target {
-                //FIXME unsafe
-                unsafe { OUTPUT_VOLUME = ovol };
-            } else {
-                break;
+            match play_target_receiver.try_recv() {
+                Err(TryRecvError::Empty) => {},
+                Err(TryRecvError::Disconnected) => { Err(AppError::ChannelRecvError)?; }
+                Ok((playing_target, ovol)) => {
+                    if playing_target {
+                        //FIXME unsafe
+                        unsafe { OUTPUT_VOLUME = ovol };
+                    } else {
+                        break;
+                    }
+                }
             }
 
             std::thread::sleep(core::time::Duration::from_millis(50));
         }
         cancel_token2.store(true, std::sync::atomic::Ordering::Relaxed);
+        core::mem::drop(output_stream);
     }
     DeviceType::None => {
         Err(AppError::NoDevice("output"))?
     }
     }
     info!("Finished playing target audio");
-    Ok(())
+    return Ok(())
 }
 
