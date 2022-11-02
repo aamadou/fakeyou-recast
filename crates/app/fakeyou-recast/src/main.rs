@@ -424,7 +424,7 @@ impl Application for App {
                     .show_open_single_file();
                     match path {
                         Ok(Some(p)) => {
-                            info!("{}", t!("opening_model", file =  &p.clone().file_name().unwrap_or_default().to_string_lossy()));
+                            info!("{}", t!("log.info.opening_model", file =  &p.clone().file_name().unwrap_or_default().to_string_lossy()));
                             let acoustic = self.acoustic.clone();
                             let path = p.clone();
                             // TODO use async instead of threads and handle errors
@@ -1107,6 +1107,7 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
                     }
                     vad_confidence.push(vad_tensor.double_value(&[0]) as f32);
                 }
+                debug!("vad_confidence: {:?}", vad_confidence);
 
                 let mut softvc_input = Vec::new();
                 softvc_input.extend_from_slice(chunk);
@@ -1115,6 +1116,7 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
 
                 // nuke inactive chunks from the buffer
                 for v in 0..chunk.len()/VAD_SIZE {
+                    if v+1 == vad_confidence.len() { break; }
                     if vad_confidence[v] < SPEAKER_THRESHOLD {
                         out_samples[v*VAD_SIZE..(v+1)*VAD_SIZE].fill(0.0);
                     }

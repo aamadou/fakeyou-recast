@@ -335,7 +335,7 @@ pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a V
             )
             .push(
                 Button::new(&mut view_state.play_target_state, 
-                    Text::new(if view_state.output_device_list_selected == Some(t!("main_ui.list-item.to_file")) {t!("main_ui.button.write_file")} else if playing_target { t!("main_ui.button.stop") } else { t!("main_ui.button.play_target")}).horizontal_alignment(Horizontal::Center).vertical_alignment(Vertical::Center))
+                    Text::new(if view_state.output_device_list_selected == Some(t!("main_ui.list_item.to_file")) {t!("main_ui.button.write_file")} else if playing_target { t!("main_ui.button.stop") } else { t!("main_ui.button.play_target")}).horizontal_alignment(Horizontal::Center).vertical_alignment(Vertical::Center))
                     .on_press(Message::PlayTargetPressed)
                     .style(style::Button::Red)
                     .width(Length::Units(130))
