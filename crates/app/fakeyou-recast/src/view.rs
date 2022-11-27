@@ -60,7 +60,7 @@ impl ViewState{
         view_state
     }
 }
-pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a Vec<String>, output_device_list_options: &'a Vec<String>, state: AppState) -> Element<'a, Message> {
+pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a Vec<String>, output_device_list_options: &'a Vec<String>, state: AppState, cpu_mode: bool) -> Element<'a, Message> {
     let empty_pathbuf = PathBuf::from("");
 
     // NB: New model selection
@@ -263,7 +263,7 @@ pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a V
                     //.push(Column::with_children(left_model_selection_col_elems).spacing(7))
                     .push(Text::new(t!("main_ui.label.input_dev")))
                     .push(
-                        Row::new().spacing(5).push(Text::new("").font(iced::Font::External { name: "Font Awesome 6 Free Solid", bytes: &style::ICON_FONT }).size(20).height(Length::Units(32)).vertical_alignment(Vertical::Center))
+                        Row::new().spacing(5).push(Text::new("").font(iced::Font::External { name: "Font Awesome 6 Free Solid", bytes: &style::ICON_FONT }).size(14).height(Length::Units(32)).vertical_alignment(Vertical::Center))
                         .push(
                             PickList::new(
                             &mut view_state.input_device_list_state,
@@ -275,7 +275,7 @@ pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a V
                         .style(style::PickList)
                         .font(iced::Font::External { name: "Fira Sans Regular", bytes: &style::NONBOLD_FONT})
                         .padding(8)
-                        .width(Length::Units(240))
+                        .width(Length::Units(245))
                     ))
                     .push(Space::with_height(Length::Units(17)))
                     .push(
@@ -293,7 +293,7 @@ pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a V
                     //.push(Column::with_children(right_model_selection_col_elems).spacing(7))
                     .push(Text::new(t!("main_ui.label.output_dev")))
                     .push(
-                        Row::new().spacing(5).push(Text::new("").font(iced::Font::External { name: "Font Awesome 6 Free Solid", bytes: &style::ICON_FONT }).size(20).height(Length::Units(32)).vertical_alignment(Vertical::Center))
+                        Row::new().spacing(5).push(Text::new("").font(iced::Font::External { name: "Font Awesome 6 Free Solid", bytes: &style::ICON_FONT }).size(14).height(Length::Units(32)).vertical_alignment(Vertical::Center))
                         .push(
                             PickList::new(
                                 &mut view_state.output_device_list_state,
@@ -361,10 +361,19 @@ pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a V
                     .height(Length::Units(35))
             )
             .push(
-                Button::new(&mut view_state.realtime_record_state, Text::new(if state == AppState::Realtime { t!("main_ui.button.stop") } else { t!("main_ui.button.realtime")}).horizontal_alignment(Horizontal::Center).vertical_alignment(Vertical::Center)).on_press(Message::RealtimeRecordPressed)
-                .style(style::Button::Red)
-                .width(Length::Units(130))
-                .height(Length::Units(35))
+                if cpu_mode {
+                    // disable button by removing on_press
+                    Button::new(&mut view_state.realtime_record_state, Text::new(if state == AppState::Realtime { t!("main_ui.button.stop") } else { t!("main_ui.button.realtime")}).horizontal_alignment(Horizontal::Center).vertical_alignment(Vertical::Center))
+                    .style(style::Button::Red)
+                    .width(Length::Units(130))
+                    .height(Length::Units(35))
+
+                } else { 
+                    Button::new(&mut view_state.realtime_record_state, Text::new(if state == AppState::Realtime { t!("main_ui.button.stop") } else { t!("main_ui.button.realtime")}).horizontal_alignment(Horizontal::Center).vertical_alignment(Vertical::Center)).on_press(Message::RealtimeRecordPressed)
+                    .style(style::Button::Red)
+                    .width(Length::Units(130))
+                    .height(Length::Units(35))
+                }
             )
         )
         .push(Space::with_height(Length::Units(20)))
