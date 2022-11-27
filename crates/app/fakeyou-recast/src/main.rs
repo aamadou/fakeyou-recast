@@ -150,9 +150,9 @@ impl RecordVector {
 #[derive(Clone, Debug)]
 pub enum Message {
     FakeYouModelBrowsePressed,
-    ModelBrowsePressed,
-    HifiganBrowsePressed,
-    HubertBrowsePressed,
+    //ModelBrowsePressed,
+    //HifiganBrowsePressed,
+    //HubertBrowsePressed,
     ShowDebugPressed,
     Slider1Changed(f32),
     Slider2Changed(f32),
@@ -410,7 +410,7 @@ impl Application for App {
                     Ok(_) => {}
                 }
             }
-            Message::ModelBrowsePressed => {
+            /*Message::ModelBrowsePressed => {
                 let location = env::current_dir();
                 if location.is_err() {
                     // how does this even happen?
@@ -513,7 +513,7 @@ impl Application for App {
                         Err(_e) => { handle_errors(Err(AppError::FileDialogError(location))); }
                     }
                 }
-            }
+            }*/
             Message::InputBrowsePressed => { 
                 let path = FileDialog::new()
                     .add_filter(t!("file_dialog.wav").as_str(), &["wav"])
@@ -694,6 +694,8 @@ impl Application for App {
                 self.view_state.login_modal_state.inner_mut().login_failed = true;
                 if e == ApiError::ReqwestError {
                     self.offline_mode = true;
+                    // fail open (for now)
+                    self.view_state.login_modal_state.show(false);
                 }
             }
             Message::SessionValid(user) => {
@@ -705,6 +707,8 @@ impl Application for App {
                 error!("{}", t!("log.error.invalid_session", error = e.to_string().as_str()));
                 if e == ApiError::ReqwestError {
                     self.offline_mode = true;
+                    // fail open (for now)
+                    self.view_state.login_modal_state.show(false);
                 }
             }
             Message::SpinnerNextFrame(_) => {

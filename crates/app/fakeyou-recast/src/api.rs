@@ -7,7 +7,7 @@ pub async fn login(username: String, password: String) -> Result<String, ApiErro
     let mut map = HashMap::new();
     map.insert("username_or_email", username);
     map.insert("password", password);
-    let res = client.post("https://api.fakeyou.com/api/v1/login")
+    let res = client.post("https://api.fakeyou.com/v1/login")
         .json(&map)
         .send()
         .await;
@@ -66,7 +66,7 @@ pub async fn check_session(token: String) -> Result<json::JsonValue, ApiError> {
     let cookie_str = format!("session={}",token);
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(reqwest::header::COOKIE, reqwest::header::HeaderValue::from_str(&cookie_str).map_err(|_|ApiError::ReqwestError)?);
-    let response = client.get("https://api.fakeyou.com/api/v1/session").headers(headers).send().await.map_err(|_|ApiError::ReqwestError)?;
+    let response = client.get("https://api.fakeyou.com/v1/session").headers(headers).send().await.map_err(|_|ApiError::ReqwestError)?;
     match response.status() {
         reqwest::StatusCode::OK => {
             let json = response.text().await.map_err(|_|ApiError::ReqwestError)?;
