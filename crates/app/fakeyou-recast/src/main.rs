@@ -1134,7 +1134,8 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
 
                 // nuke inactive chunks from the buffer
                 for v in 0..chunk.len()/VAD_SIZE {
-                    if v+1 == vad_confidence.len() { break; }
+                    if v+1 >= vad_confidence.len() { break; }
+                    if out_samples.len() < (v+1)*VAD_SIZE { break; }
                     if vad_confidence[v] < SPEAKER_THRESHOLD {
                         out_samples[v*VAD_SIZE..(v+1)*VAD_SIZE].fill(0.0);
                     }
