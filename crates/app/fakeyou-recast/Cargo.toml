@@ -41,3 +41,6 @@ winres = "0.1"
 [profile.release]
 #lto = true
 strip = true
+
+[features]
+devmode = []

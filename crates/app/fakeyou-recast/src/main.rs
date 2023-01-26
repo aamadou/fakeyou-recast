@@ -148,10 +148,14 @@ impl RecordVector {
 #[derive(Clone, Debug)]
 pub enum Message {
     FakeYouModelBrowsePressed,
-    //ModelBrowsePressed,
-    //HifiganBrowsePressed,
-    //HubertBrowsePressed,
-    //ShowDebugPressed,
+    #[cfg(feature="devmode")]
+    ModelBrowsePressed,
+    #[cfg(feature="devmode")]
+    HifiganBrowsePressed,
+    #[cfg(feature="devmode")]
+    HubertBrowsePressed,
+    #[cfg(feature="devmode")]
+    ShowDebugPressed,
     Slider1Changed(f32),
     Slider2Changed(f32),
     RecordPressed,
@@ -324,9 +328,10 @@ impl Application for App {
     fn update(&mut self, msg: Self::Message) -> Command<Self::Message> {
         let mut command: Command<Self::Message> = Command::none();
         match msg {
-            /*Message::ShowDebugPressed => {
+            #[cfg(feature="devmode")]
+            Message::ShowDebugPressed => {
                 self.view_state.show_debug = !self.view_state.show_debug;
-            }*/
+            }
             Message::Slider1Changed(new_value) => {
                 self.view_state.slider_1_value = new_value;
                 //FIXME unsafe and stupid
@@ -405,7 +410,8 @@ impl Application for App {
                     Ok(_) => {}
                 }
             }
-            /*Message::ModelBrowsePressed => {
+            #[cfg(feature="devmode")]
+            Message::ModelBrowsePressed => {
                 let location = env::current_dir();
                 if location.is_err() {
                     // how does this even happen?
@@ -440,10 +446,6 @@ impl Application for App {
                                 hubert.load(PathBuf::from("./models/model2.recast_base"))}
                             );
                             self.view_state.hubert_browse_selected = Some(PathBuf::from("./models/model2.recast_base"));
-                            let vad = self.vad.clone();
-                            std::thread::spawn(move || {
-                                vad.load(PathBuf::from("./models/silero_vad.jit"))
-                            });
                         },
                         Ok(None) => {},
                         Err(_e) => { handle_errors(Err(AppError::FileDialogError(location))); }
@@ -453,6 +455,7 @@ impl Application for App {
                     // random thread crap to be able to tell when they're finished
                 }
             }
+            #[cfg(feature="devmode")]
             Message::HifiganBrowsePressed => { 
                 let location = env::current_dir();
                 if location.is_err() {
@@ -481,6 +484,7 @@ impl Application for App {
                     }
                 }
             }
+            #[cfg(feature="devmode")]
             Message::HubertBrowsePressed => { 
                 let location = env::current_dir();
                 if location.is_err() {
@@ -508,7 +512,7 @@ impl Application for App {
                         Err(_e) => { handle_errors(Err(AppError::FileDialogError(location))); }
                     }
                 }
-            }*/
+            }
             Message::InputBrowsePressed => { 
                 let path = FileDialog::new()
                     .add_filter(t!("file_dialog.wav").as_str(), &["wav"])

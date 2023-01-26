@@ -87,8 +87,12 @@ pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a V
     let fakeyou_model_selection_row = Column::with_children(fakeyou_model_selection_col_elems).spacing(7);
 
     // NB: Old model selection
-    /*let mut left_model_selection_col_elems: Vec<Element<Message>> = vec![];
+    
+    let mut left_model_selection_col_elems: Vec<Element<Message>> = vec![];
     let mut right_model_selection_col_elems: Vec<Element<Message>> = vec![];
+
+    #[cfg(feature="devmode")]
+    {
     let selected_model_str = if view_state.model_browse_selected.is_none() { t!("main_ui.label.no_file") } else {view_state.model_browse_selected.as_ref().unwrap_or(&empty_pathbuf).file_stem().unwrap_or_default().to_str().unwrap_or_default().to_string()};
     let selected_hifigan_str = if view_state.hifigan_browse_selected.is_none() { t!("main_ui.label.no_file") } else {view_state.hifigan_browse_selected.as_ref().unwrap_or(&empty_pathbuf).file_stem().unwrap_or_default().to_str().unwrap_or_default().to_string()};
     left_model_selection_col_elems
@@ -118,7 +122,8 @@ pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a V
     );
     right_model_selection_col_elems.push(
         Button::new(&mut view_state.hifigan_browse_state, Text::new(t!("main_ui.button.browse")).horizontal_alignment(Horizontal::Center).vertical_alignment(Vertical::Center)).on_press(Message::HifiganBrowsePressed).style(style::Button::Grey).width(Length::Units(262)).height(Length::Units(35)).into()
-    );*/
+    );
+    }
 
 
     let mut left_file_selection_col_elems: Vec<Element<Message>> = vec![];
@@ -260,7 +265,8 @@ pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a V
         .push(
             Row::new().spacing(30).push( 
                 Column::new().spacing(7)
-                    //.push(Column::with_children(left_model_selection_col_elems).spacing(7))
+                    //TODO make sure this doesn't break non-dev-mode
+                    .push(Column::with_children(left_model_selection_col_elems).spacing(7))
                     .push(Text::new(t!("main_ui.label.input_dev")))
                     .push(
                         Row::new().spacing(5).push(Text::new("").font(iced::Font::External { name: "Font Awesome 6 Free Solid", bytes: &style::ICON_FONT }).size(14).height(Length::Units(32)).vertical_alignment(Vertical::Center))
@@ -290,7 +296,8 @@ pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a V
                     ) 
             ).push(
                 Column::new().spacing(7)
-                    //.push(Column::with_children(right_model_selection_col_elems).spacing(7))
+                    //TODO make sure this doesn't break non-dev-mode
+                    .push(Column::with_children(right_model_selection_col_elems).spacing(7))
                     .push(Text::new(t!("main_ui.label.output_dev")))
                     .push(
                         Row::new().spacing(5).push(Text::new("").font(iced::Font::External { name: "Font Awesome 6 Free Solid", bytes: &style::ICON_FONT }).size(14).height(Length::Units(32)).vertical_alignment(Vertical::Center))
