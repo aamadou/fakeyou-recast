@@ -266,6 +266,7 @@ impl Application for App {
 
         let record_vec = RecordVector::new();
 
+        #[cfg(not(feature="devmode"))]
         view_state.login_modal_state.show(true);
 
         tch::maybe_init_cuda();
