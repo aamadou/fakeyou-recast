@@ -253,10 +253,10 @@ pub fn record_audio_vec(input_device: DeviceType, receiver: std::sync::mpsc::Rec
                 }
             }
 
-            let mut output_vec: Vec<f32> = Vec::new();
+            //let mut output_vec: Vec<f32> = Vec::new();
 
             // Resample
-            let in_rate = reader.spec().sample_rate as usize;
+            /*let in_rate = reader.spec().sample_rate as usize;
             let chunk_size = (in_rate as f32 * 0.4 * reader.spec().channels as f32) as usize; // 400ms
             let mut resampler = FftFixedInOut::<f32>::new(in_rate, MODEL_SAMPLE_RATE, chunk_size, 1).map_err(|e| AppError::ResamplerConstructionError(e))?;
             let mut resampler_input_buffer = resampler.input_buffer_allocate();
@@ -285,10 +285,11 @@ pub fn record_audio_vec(input_device: DeviceType, receiver: std::sync::mpsc::Rec
 
                 // prepare for next iteration
                 chunk = record_vec_iter.by_ref().map(|r| *r).take(desired_size).collect();
-            }
+            }*/
 
             info!("Recording stopped");
-            Ok(output_vec)
+            //Ok(output_vec)
+            record_vec
         },
         DeviceType::Device(d) =>
         {

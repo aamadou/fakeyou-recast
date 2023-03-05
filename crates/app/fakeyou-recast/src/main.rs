@@ -842,8 +842,8 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
     let out_n_channels = output_config.channels() as usize;
     let out_format = output_config.sample_format();
 
-    let in_chunk_size = (0.4 * in_rate as f32 * in_n_channels as f32) as usize; // 400ms
-    let out_chunk_size = (0.4 * out_rate as f32 * out_n_channels as f32) as usize; // 400ms
+    let in_chunk_size = (1.0 * in_rate as f32 * in_n_channels as f32) as usize; // 400ms
+    let out_chunk_size = (1.0 * out_rate as f32 * out_n_channels as f32) as usize; // 400ms
                                                                                    
     info!("{}", t!("log.info.in_config", ch = in_n_channels.to_string().as_str(), freq = in_rate.to_string().as_str(), format = format!("{:?}", in_format).as_str()));
     info!("{}", t!("log.info.out_config", ch = out_n_channels.to_string().as_str(), freq = out_rate.to_string().as_str(), format = format!("{:?}", out_format).as_str()));
@@ -944,7 +944,8 @@ async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32,
                     vad_bools.push(vad.is_voice_segment(&vad_chunk_s16).unwrap_or(false));
                 });
                 
-                let res = softvc::inference(&softvc_input, hubert.clone(), acoustic.clone(), hifigan.clone());
+                //let res = softvc::inference(&softvc_input, hubert.clone(), acoustic.clone(), hifigan.clone());
+                let res = Ok(softvc_input.clone());
                 match res {
                     Err(e) => {
                         // don't spam errors if there's already one known
@@ -1081,7 +1082,7 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
         DeviceType::File((ref f, _)) => {
             let spec = hound::WavSpec {
                 channels: 1,
-                sample_rate: MODEL_SAMPLE_RATE as u32,
+                sample_rate: 24000 as u32,
                 bits_per_sample: 16,
                 sample_format: hound::SampleFormat::Int,
             };
@@ -1089,10 +1090,10 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
             'outer: for chunk in source.chunks(OFFLINE_CHUNK_SIZE) {
                 // Find active 10ms chunks with WebRTC VAD
                 let mut vad_bools: Vec<bool> = Vec::new();
-                for vad_chunk in chunk.chunks(VAD_SIZE) {
+                /*for vad_chunk in chunk.chunks(VAD_SIZE) {
                     let vad_chunk_s16: Vec<i16> = vad_chunk.iter().map(|a: &f32| audio::float_to_pcm_s16(*a)).collect();
                     vad_bools.push(vad.is_voice_segment(&vad_chunk_s16).unwrap_or(false));
-                }
+                }*/
 
                 let mut softvc_input = Vec::new();
                 softvc_input.extend_from_slice(chunk);
@@ -1100,13 +1101,19 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
                 let mut out_samples = softvc::inference(&softvc_input, hubert.clone(), acoustic.clone(), hifigan.clone())?;
 
                 // nuke inactive chunks from the buffer
-                for v in 0..chunk.len() / VAD_SIZE {
+                /*for v in 0..chunk.len() / VAD_SIZE {
                     if v+1 >= vad_bools.len() { break; }
                     if out_samples.len() < (v+1)*VAD_SIZE { break; }
                     if vad_bools[v] == false {
                         out_samples[v*VAD_SIZE..(v+1)*VAD_SIZE].fill(0.0);
                     }
-                }
+                }*/
+
+
+                /*use rocoder::stretcher::Stretcher;
+                use rocoder::audio::AudioSpec;
+                Stretcher::new(AudioSpec { channels: 1, sample_rate: 24000 },*/
+
                 for sample in out_samples.iter() {
                     writer.write_sample(audio::float_to_pcm_s16(audio::apply_volume(*sample, unsafe { OUTPUT_VOLUME }))).map_err(|e| AppError::HoundError(e))?;
                 }
@@ -1114,7 +1121,7 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
             writer.finalize().map_err(|e| AppError::HoundError(e))?;
         },
         DeviceType::Device(ref d) => {
-            let playback_secs = source.len() as f32 / 16000.0;
+            let playback_secs = source.len() as f32 / MODEL_SAMPLE_RATE as f32;
 
             let output_config = d.default_output_config().map_err(|e| AppError::StreamConfigError(e))?;
             let out_rate = output_config.sample_rate().0 as usize;
@@ -1201,7 +1208,7 @@ async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: softvc:
                     break;
                 }
                 let processing_time = processing_end_time - processing_start_time;
-                let sleep_time = chunk.len() as f32 / MODEL_SAMPLE_RATE as f32 - processing_time.as_secs_f32();
+                let sleep_time = chunk.len() as f32 / 24000 as f32 - processing_time.as_secs_f32();
                 if sleep_time > 0.0 {
                     std::thread::sleep(core::time::Duration::from_secs_f32(sleep_time));
                 }

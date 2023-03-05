@@ -78,8 +78,9 @@ impl Model for Hifigan {
 impl Hifigan {
     pub fn forward(&self, input: tch::Tensor) -> Result<Vec<f32>, AppError> {
         let model = self.0.try_lock().map_err(|_e| AppError::LockError)?;
+        let input_sliced = input.slice(1, 0, 100, 1);
         let hifigan_output = tch::no_grad(|| {
-             model.as_ref().ok_or(AppError::NoModel)?.forward_ts(&[input]).map_err(|_e| AppError::ModelError(_e))
+             model.as_ref().ok_or(AppError::NoModel)?.forward_ts(&[input_sliced]).map_err(|_e| AppError::ModelError(_e))
         })?;
         let sample_count = hifigan_output.size()[2];
         let samples = hifigan_output.reshape(&[sample_count]).to(tch::Device::Cpu);
