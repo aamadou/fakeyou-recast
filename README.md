@@ -8,7 +8,7 @@
 # Setup
 - Install the dependencies listed above
 - Extract the [base models](https://storyteller-nextcloud.paulsajna.com/s/K7z8GHbKYpB3amH) to the models directory of the repo
-- Download JIT acoustic(.recast) and hifigan(hifigan-jit.pt) models and copy to the models directory
+- Download JIT acoustic(.recast) and hifigan(hifigan-jit.pt) models and copy to the models directory https://drive.google.com/drive/folders/1GY-K9cb-naBJdANGQ9MGc8Vzkzyh9Il3?usp=sharing
 - run the app with `cargo run --release --bin fakeyou-recast --features=devmode`
 
 #  Usage
