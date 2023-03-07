@@ -285,7 +285,6 @@ pub async fn play_target_cpu(source: Vec<f32>, hubert: softvc::Hubert, acoustic:
 
             resampler_input_buffer[0].resize(resampler_input_size, 0.0);
 
-            let output_chunk_size = out_rate * resampler_input_size / MODEL_SAMPLE_RATE * n_channels;
             let mut producer = std::collections::VecDeque::new();
 
             let arc_cancel_token = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));

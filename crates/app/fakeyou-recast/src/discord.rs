@@ -1,20 +1,15 @@
 use chrono::Utc;
 use discord_presence::Client;
-use discord_rich_presence::activity::{Activity, Assets, Timestamps};
-use discord_rich_presence::{DiscordIpc, DiscordIpcClient};
+//use discord_rich_presence::activity::{Activity, Assets, Timestamps};
+//use discord_rich_presence::{DiscordIpc, DiscordIpcClient};
 use std::thread;
 use std::time::Duration;
 
-/// Set up and configured via Discord developer panel.
-/// The name of the application and thumbnail icons are configured from the web panel.
-///   - docs: https://discord.com/rich-presence
-///   - config: https://discord.com/developers/applications
-const FAKEYOU_DISCORD_APP_ID : &'static str = "1031772546841972806";
-const FAKEYOU_DISCORD_APP_ID_INT : u64 = 1031772546841972806;
+use crate::consts::{/*FAKEYOU_DISCORD_APP_ID,*/ FAKEYOU_DISCORD_APP_ID_INT};
 
 #[derive(Clone, Debug)]
 pub enum DiscordError {
-    ConfigError,
+    //ConfigError,
     ConnectionError,
     StatusUpdateError,
 }
@@ -33,11 +28,11 @@ pub fn spawn_discord_thread() {
     });
 }
 
-pub fn launch_discord_presence() -> Result<(), DiscordError> {
+/*pub fn launch_discord_presence() -> Result<(), DiscordError> {
     // NB: We go to a lot of trouble error handling here because the Discord crate authors
     // use dyn-sized errors that are not at all ergonomic.
     let mut client = DiscordIpcClient::new(FAKEYOU_DISCORD_APP_ID)
-        .map_err(|e| DiscordError::ConfigError)?;
+        .map_err(|_e| DiscordError::ConfigError)?;
 
     client.connect()
         .map_err(|_e| DiscordError::ConnectionError)?;
@@ -54,7 +49,7 @@ pub fn launch_discord_presence() -> Result<(), DiscordError> {
     ).map_err(|_e| DiscordError::StatusUpdateError)?;
 
     Ok(())
-}
+}*/
 
 pub fn launch_discord_presence_alt(launch_timestamp: u64) -> Result<(), DiscordError> {
     let mut client = Client::new(FAKEYOU_DISCORD_APP_ID_INT);

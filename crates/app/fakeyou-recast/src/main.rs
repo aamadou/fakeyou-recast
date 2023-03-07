@@ -1,7 +1,6 @@
 // launch as a gui app on windows without a command prompt
 #![windows_subsystem = "windows"]
 
-
 use std::{path::PathBuf, env, io::Write, sync::mpsc}; 
 
 use iced::{executor, Application, Element, Command, Settings, window::{self, Icon}, Subscription, Color, time};
@@ -30,7 +29,7 @@ use softvc::Model;
 use api::ApiError;
 use app_state::AppState;
 
-use  audio_pipelines::{play_source::play_source, play_target::{play_target, play_target_cpu}, realtime::start_realtime};
+use audio_pipelines::{play_source::play_source, play_target::{play_target, play_target_cpu}, realtime::start_realtime, record::start_recording};
 
 pub use error::AppError; //FIXME fix the imports that depend on this and get rid of the pub use
 
@@ -101,7 +100,9 @@ struct App {
     view_state: view::ViewState,
     input_device_list_options: Vec<String>,
     output_device_list_options: Vec<String>,
-    session_token: Option<String>,
+    //NB this will be used for the api when we download models probably
+    #[allow(unused)]
+    session_token: Option<String>, 
     userdata: Option<json::JsonValue>,
     record_sender: Option<mpsc::Sender<(bool, f32)>>,
     realtime_record_sender: Option<mpsc::Sender<(bool, f32, f32)>>,
@@ -114,19 +115,10 @@ struct App {
     spinner_frames: Vec<Vec<u8>>
 }
 
+// FIXME we should probably get rid of this and just use a vec
+// at one point I was trying to encapsulate some fancier stuff
+// for shared mutability but it didn't work out
 #[derive(Debug, Clone)]
-/*struct RecordVector(Arc<Vec<f32>>);
-impl RecordVector {
-    pub fn new() -> RecordVector {
-        Self(Arc::new(Vec::<f32>::new()))
-    }
-    pub fn set_contents(&self, inner: Vec<f32>)  {
-        *self.0 = inner;
-    }
-    pub fn get_contents(&self) -> Vec<f32> {
-        *self.0
-    }
-}*/
 struct RecordVector(Vec<f32>);
 impl RecordVector {
     pub fn new() -> RecordVector {
@@ -149,8 +141,6 @@ pub enum Message {
     HifiganBrowsePressed,
     #[cfg(feature="devmode")]
     HubertBrowsePressed,
-    #[cfg(feature="devmode")]
-    ShowDebugPressed,
     Slider1Changed(f32),
     Slider2Changed(f32),
     ChunkSizeSliderChanged(f32),
@@ -204,11 +194,12 @@ impl Application for App {
     type Message = crate::Message;
     type Flags = ();
 
+    /// App initialization
     fn new(_flags: ()) -> (App, Command<Self::Message>) {
         let hubert = softvc::Hubert::new();
         let acoustic = softvc::Acoustic::new();
         let hifigan = softvc::Hifigan::new();
-        let mut view_state = view::ViewState::new();
+        let view_state = view::ViewState::new();
         let record_sender = None;
         let realtime_record_sender = None;
         let play_target_sender = None;
@@ -253,7 +244,6 @@ impl Application for App {
             spinner::FRAME29.to_vec(),
             spinner::FRAME30.to_vec(),
         ];
-
 
         let mut session_token = None;
         let userdata = None;
@@ -326,10 +316,6 @@ impl Application for App {
     fn update(&mut self, msg: Self::Message) -> Command<Self::Message> {
         let mut command: Command<Self::Message> = Command::none();
         match msg {
-            #[cfg(feature="devmode")]
-            Message::ShowDebugPressed => {
-                self.view_state.show_debug = !self.view_state.show_debug;
-            }
             Message::Slider1Changed(new_value) => {
                 self.view_state.slider_1_value = new_value;
                 //FIXME unsafe and stupid
@@ -408,7 +394,7 @@ impl Application for App {
             }
             Message::FakeYouModelBrowsePressed => {
                 match self.handle_fakeyou_model_browse_pressed() {
-                    Err(e) => {
+                    Err(_e) => {
                         handle_errors(Err(AppError::FileDialogError(self.current_directory.clone())));
                     }
                     Ok(_) => {}
@@ -743,8 +729,6 @@ impl Application for App {
             Subscription::none()
         }
     }
-
-
 }
 
 impl App {
@@ -794,13 +778,5 @@ impl App {
         //FIXME some kind of progress bar while all this crap loads
         Ok(())
     }
-}
-
-//FIXME break this up and move parts of it into audio.rs
-/// Record to a buffer for later conversion (non-realtime)
-async fn start_recording(input_device: audio::DeviceType, receiver: std::sync::mpsc::Receiver<(bool, f32)>) -> Result<Vec<f32>, AppError> {
-    info!("{}", t!("log.info.started_recording", dev = input_device.to_string().as_str()));
-    let vec = audio::record_audio_vec(input_device, receiver)?;
-    Ok(vec)
 }
 

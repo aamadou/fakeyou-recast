@@ -304,7 +304,7 @@ pub fn record_audio_vec(input_device: DeviceType, receiver: std::sync::mpsc::Rec
             let arc1 = arc_vec.clone();
             let arc2 = arc_vec.clone();
 
-            let input_vol = receiver.recv().map_err(|e| AppError::ChannelRecvError)?.1;
+            let input_vol = receiver.recv().map_err(|_e| AppError::ChannelRecvError)?.1;
             let atomic_vol = AtomicU32::new(input_vol.to_bits());
             let arc_atomic_vol = Arc::new(atomic_vol);
 

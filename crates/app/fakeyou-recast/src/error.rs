@@ -42,8 +42,9 @@ impl core::fmt::Display for AppError {
             AppError::LockError =>  f.write_str(t!("log.error.lock").as_str()),
             AppError::ModelLoadError => f.write_str(t!("log.error.model_load").as_str()),
             AppError::NoModel => f.write_str(t!("log.error.no_model").as_str()),
-            AppError::ModelError(e) => f.write_str(t!("log.error.model_error").as_str()),
+            AppError::ModelError(_e) => f.write_str(t!("log.error.model_error").as_str()),
             AppError::FileDialogError(p) => f.write_str(t!("log.error.filedlg", path = p.to_str().unwrap_or_default()).as_str()),
+            // NB: why does this say unreachable in rust-analyzer???
             AppError::IoError(e) => f.write_str(t!("log.error.io", error = e.to_string().as_str()).as_str()),
             AppError::ResamplerConstructionError(e) => f.write_str(t!("log.error.resampler_construction", error = e.to_string().as_str()).as_str()),
             AppError::ResampleError(e) => f.write_str(t!("log.error.resample", error = e.to_string().as_str()).as_str()),

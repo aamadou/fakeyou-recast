@@ -1,7 +1,7 @@
 use crate::{Message, app_state::AppState};
 use std::path::PathBuf;
-use iced::{Length, Text, Row, Column,  Container, Element, slider::{self, Slider}, pick_list::{self, PickList}, button::{self, Button}, text_input::{self, TextInput}, checkbox::{self, Checkbox}, Space, Color, Rectangle};
-use iced_aw::{modal::{self, Modal}, card::{self, Card}, tab_bar::{self, TabLabel, TabBar}};
+use iced::{Length, Text, Row, Column,  Container, Element, slider::{self, Slider}, pick_list::{self, PickList}, button::{self, Button}, text_input::{self, TextInput}, checkbox::Checkbox, Space, Color};
+use iced_aw::{modal::{self, Modal}, card::Card, tab_bar::{TabLabel, TabBar}};
 use iced_native::alignment::{Horizontal, Vertical};
 use iced_native::{widget::image::Image, image::Handle};
 use rust_i18n::t;
@@ -220,7 +220,7 @@ pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a V
                     .horizontal_alignment(Horizontal::Center)
                     .vertical_alignment(Vertical::Center)
                 )
-                .style(style::Button::GreyDisabled)
+                .style(style::Button::Grey)
                 .width(Length::Units(262))
                 .height(Length::Units(35))
                 .into()
@@ -278,7 +278,7 @@ pub fn view<'a> (view_state: &'a mut ViewState, input_device_list_options: &'a V
                     .color(Color::from_rgba8(255, 255, 255, 0.30))
                     .horizontal_alignment(Horizontal::Center)
                     .vertical_alignment(Vertical::Center))
-                    .style(style::Button::GreyDisabled)
+                    .style(style::Button::Grey)
                     .width(Length::Units(262))
                     .height(Length::Units(35)).into()
         );
@@ -519,9 +519,7 @@ pub mod style {
 
     pub enum Button {
         Red,
-        RedDisabled,
         Grey,
-        GreyDisabled,
     }
 
     impl button::StyleSheet for Button {
@@ -539,22 +537,6 @@ pub mod style {
                     button::Style {
                     text_color: Color::WHITE,
                         background: Some(Background::Color(Color::from_rgb8(57, 57, 76))),
-                        border_radius: 5.0,
-                        ..button::Style::default()
-                    }
-                }
-                Button::RedDisabled => { 
-                    button::Style {
-                        text_color: Color::WHITE,
-                        background: Some(Background::Color(Color::from_rgba8(252, 107, 104, 0.30))),
-                        border_radius: 5.0,
-                        ..button::Style::default()
-                    }
-                }
-                Button::GreyDisabled => {
-                    button::Style {
-                    text_color: Color::WHITE,
-                        background: Some(Background::Color(Color::from_rgba8(57, 57, 76, 0.30))),
                         border_radius: 5.0,
                         ..button::Style::default()
                     }
