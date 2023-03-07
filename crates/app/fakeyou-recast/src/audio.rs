@@ -1,6 +1,6 @@
 use std::{fs::File, path::PathBuf, sync::mpsc::TryRecvError};
 use cpal::{self, SampleFormat, traits::{DeviceTrait, HostTrait, StreamTrait}};
-use crate::AppError;
+use crate::error::AppError;
 use log::{info, error};
 use rubato::{FftFixedInOut, Resampler};
 use crate::consts::*;

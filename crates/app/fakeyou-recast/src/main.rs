@@ -26,12 +26,11 @@ mod audio_pipelines;
 use consts::*;
 use crate::discord::spawn_discord_thread;
 use softvc::Model;
-use api::ApiError;
+use api::ApiError; // should this be in the error module?
 use app_state::AppState;
+use error::AppError;
 
 use audio_pipelines::{play_source::play_source, play_target::{play_target, play_target_cpu}, realtime::start_realtime, record::start_recording};
-
-pub use error::AppError; //FIXME fix the imports that depend on this and get rid of the pub use
 
 const ICON: &[u8; 262144] = include_bytes!("../../../../assets/icon.data");
 
