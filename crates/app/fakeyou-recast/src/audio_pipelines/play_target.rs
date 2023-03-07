@@ -7,7 +7,9 @@ use cpal::{traits::{DeviceTrait, StreamTrait}, SampleFormat};
 use log::{info, debug, error};
 use rust_i18n::t;
 
-use crate::{softvc, handle_errors, AppError, audio::{self, DeviceType}, consts::{MODEL_SAMPLE_RATE, OFFLINE_CHUNK_SIZE, VAD_SIZE}}; 
+use crate::{softvc, handle_errors, AppError, audio::{self, DeviceType}, consts::{MODEL_SAMPLE_RATE, OFFLINE_CHUNK_SIZE}, 
+    audio_pipelines::common::{compute_vad, replace_inactivity_with_silence, dupe_n_channels, dupe_n_channels_vecdeque}
+}; 
 
 use crate::OUTPUT_VOLUME; //FIXME get rid of this or better encapsulate it (currently a mutable static)
 
@@ -17,6 +19,7 @@ pub async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: sof
     debug!("first 20 recorded samples: {:?}", source[..20].to_vec());
 
     let mut vad = Vad::new_with_rate_and_mode(SampleRate::Rate16kHz, VadMode::VeryAggressive);
+
     match output_device {
         DeviceType::File((ref f, _)) => {
             let spec = hound::WavSpec {
@@ -28,11 +31,7 @@ pub async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: sof
             let mut writer = hound::WavWriter::new(f, spec).map_err(|e| AppError::HoundError(e))?;
             for chunk in source.chunks(OFFLINE_CHUNK_SIZE) {
                 // Find active 10ms chunks with WebRTC VAD
-                let mut vad_bools: Vec<bool> = Vec::new();
-                for vad_chunk in chunk.chunks(VAD_SIZE) {
-                    let vad_chunk_s16: Vec<i16> = vad_chunk.iter().map(|a: &f32| audio::float_to_pcm_s16(*a)).collect();
-                    vad_bools.push(vad.is_voice_segment(&vad_chunk_s16).unwrap_or(false));
-                }
+                let vad_bools = compute_vad(&mut vad, chunk);
 
                 let mut softvc_input = Vec::new();
                 softvc_input.extend_from_slice(chunk);
@@ -40,13 +39,8 @@ pub async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: sof
                 let mut out_samples = softvc::inference(&softvc_input, hubert.clone(), acoustic.clone(), hifigan.clone())?;
 
                 // nuke inactive chunks from the buffer
-                for v in 0..chunk.len() / VAD_SIZE {
-                    if v+1 >= vad_bools.len() { break; }
-                    if out_samples.len() < (v+1)*VAD_SIZE { break; }
-                    if vad_bools[v] == false {
-                        out_samples[v*VAD_SIZE..(v+1)*VAD_SIZE].fill(0.0);
-                    }
-                }
+                replace_inactivity_with_silence(&vad_bools, &mut out_samples);
+
                 for sample in out_samples.iter() {
                     writer.write_sample(audio::float_to_pcm_s16(audio::apply_volume(*sample, unsafe { OUTPUT_VOLUME }))).map_err(|e| AppError::HoundError(e))?;
                 }
@@ -54,7 +48,7 @@ pub async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: sof
             writer.finalize().map_err(|e| AppError::HoundError(e))?;
         },
         DeviceType::Device(ref d) => {
-            let playback_secs = source.len() as f32 / 16000.0;
+            let playback_secs = source.len() as f32 / MODEL_SAMPLE_RATE as f32;
 
             let output_config = d.default_output_config().map_err(|e| AppError::StreamConfigError(e))?;
             let out_rate = output_config.sample_rate().0 as usize;
@@ -88,13 +82,9 @@ pub async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: sof
                 {
                     let processing_start_time = std::time::Instant::now();
                     // Find active 10ms chunks with WebRTC VAD
-                    let mut vad_bools: Vec<bool> = Vec::new();
-                    for vad_chunk in chunk.chunks(VAD_SIZE) {
-                        let vad_chunk_s16: Vec<i16> = vad_chunk.iter().map(|a: &f32| audio::float_to_pcm_s16(*a)).collect();
-                        vad_bools.push(vad.is_voice_segment(&vad_chunk_s16).unwrap_or(false));
-                    }
+                    let vad_bools = compute_vad(&mut vad, chunk);
 
-                    let softvc_out = softvc::inference(&chunk, hubert.clone(), acoustic.clone(), hifigan.clone());
+                    let softvc_out = softvc::inference(chunk, hubert.clone(), acoustic.clone(), hifigan.clone());
                     match softvc_out {
                         Err(e) => {
                             // don't spam errors if there's already one known
@@ -109,33 +99,16 @@ pub async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: sof
                                 samples.resize(resampler_input_size, 0.0);
                             }
                             debug!("first 20 samples from inference: {:?}", samples[..20].to_vec()); 
-                            resampler_input_buffer[0].iter_mut().zip(
-                            samples.iter()
-                            .enumerate()
-                            .map(|(e, sample)| {
-                                let mut sa = 0.0;
-                                for i in 0..resampler_input_size/VAD_SIZE {
-                                    if i == vad_bools.len() { break; }
-                                    if e < (i+1)*VAD_SIZE && e > i*VAD_SIZE && vad_bools[i] {
-                                        sa = *sample;
-                                        break;
-                                    }
-                                }
-                                sa
-                            }))
-                            .for_each(|(i, o)| *i = o) ;
-                        let resampler_res = resampler.process_into_buffer(&resampler_input_buffer, &mut resampler_output_buffer, None);
-                        if let Err(e) = resampler_res {
-                           error!("{}", t!("log.error.out_resampler", error = e.to_string().as_str()));
-                        }
-                        resampler_output_buffer[0].iter().for_each(|&sample| {
-                            // mono to stereo etc.
-                            for _ in 0..n_channels {
-                                producer.push(sample).unwrap_or(()); 
+                            replace_inactivity_with_silence(&vad_bools, &mut samples);
+                            resampler_input_buffer[0].copy_from_slice(&samples);
+                            let resampler_res = resampler.process_into_buffer(&resampler_input_buffer, &mut resampler_output_buffer, None);
+                            if let Err(e) = resampler_res {
+                                error!("{}", t!("log.error.out_resampler", error = e.to_string().as_str()));
                             }
-                        });
+                            dupe_n_channels(n_channels, &mut resampler_output_buffer[0], &mut producer)
+                        }
                     }
-                }
+
                 let processing_end_time = std::time::Instant::now();
                 if cancel_token3.load(std::sync::atomic::Ordering::Relaxed) {
                     break;
@@ -145,10 +118,11 @@ pub async fn play_target(source: Vec<f32>, hubert: softvc::Hubert, acoustic: sof
                 if sleep_time > 0.0 {
                     std::thread::sleep(core::time::Duration::from_secs_f32(sleep_time));
                 }
-            }
-        });
+                }
+            });
+            
 
-        let output_data_fn = move |data: &mut cpal::Data, _: &cpal::OutputCallbackInfo| {
+            let output_data_fn = move |data: &mut cpal::Data, _: &cpal::OutputCallbackInfo| {
             match data.sample_format() {
                 SampleFormat::F32 => {
                     // this unwrap is safe because it only happens if the sample format doesn't
@@ -240,25 +214,15 @@ pub async fn play_target_cpu(source: Vec<f32>, hubert: softvc::Hubert, acoustic:
             let mut writer = hound::WavWriter::new(f, spec).map_err(|e| AppError::HoundError(e))?;
             for chunk in source.chunks(OFFLINE_CHUNK_SIZE) {
                 // Find active 10ms chunks with WebRTC VAD
-                let mut vad_bools: Vec<bool> = Vec::new();
-                for vad_chunk in chunk.chunks(VAD_SIZE) {
-                    let vad_chunk_s16: Vec<i16> = vad_chunk.iter().map(|a: &f32| audio::float_to_pcm_s16(*a)).collect();
-                    vad_bools.push(vad.is_voice_segment(&vad_chunk_s16).unwrap_or(false));
-                }
+                let vad_bools = compute_vad(&mut vad, chunk);
 
                 let mut softvc_input = Vec::new();
                 softvc_input.extend_from_slice(chunk);
 
                 let mut out_samples = softvc::inference(&softvc_input, hubert.clone(), acoustic.clone(), hifigan.clone())?;
 
-                // nuke inactive chunks from the buffer
-                for v in 0..chunk.len() / VAD_SIZE {
-                    if v+1 >= vad_bools.len() { break; }
-                    if out_samples.len() < (v+1)*VAD_SIZE { break; }
-                    if vad_bools[v] == false {
-                        out_samples[v*VAD_SIZE..(v+1)*VAD_SIZE].fill(0.0);
-                    }
-                }
+                replace_inactivity_with_silence(&vad_bools, &mut out_samples);
+
                 for sample in out_samples.iter() {
                     writer.write_sample(audio::float_to_pcm_s16(audio::apply_volume(*sample, unsafe { OUTPUT_VOLUME }))).map_err(|e| AppError::HoundError(e))?;
                 }
@@ -266,7 +230,7 @@ pub async fn play_target_cpu(source: Vec<f32>, hubert: softvc::Hubert, acoustic:
             writer.finalize().map_err(|e| AppError::HoundError(e))?;
         },
         DeviceType::Device(ref d) => {
-            let playback_secs = source.len() as f32 / 16000.0;
+            let playback_secs = source.len() as f32 / MODEL_SAMPLE_RATE as f32;
 
             let output_config = d.default_output_config().map_err(|e| AppError::StreamConfigError(e))?;
             let out_rate = output_config.sample_rate().0 as usize;
@@ -295,13 +259,9 @@ pub async fn play_target_cpu(source: Vec<f32>, hubert: softvc::Hubert, acoustic:
             for chunk in source.chunks(resampler_input_size)
             {
                 // Find active 10ms chunks with WebRTC VAD
-                let mut vad_bools: Vec<bool> = Vec::new();
-                for vad_chunk in chunk.chunks(VAD_SIZE) {
-                    let vad_chunk_s16: Vec<i16> = vad_chunk.iter().map(|a: &f32| audio::float_to_pcm_s16(*a)).collect();
-                    vad_bools.push(vad.is_voice_segment(&vad_chunk_s16).unwrap_or(false));
-                }
+                let vad_bools = compute_vad(&mut vad, chunk);
 
-                let softvc_out = softvc::inference(&chunk, hubert.clone(), acoustic.clone(), hifigan.clone());
+                let softvc_out = softvc::inference(chunk, hubert.clone(), acoustic.clone(), hifigan.clone());
                 match softvc_out {
                     Err(e) => {
                         // don't spam errors if there's already one known
@@ -316,31 +276,15 @@ pub async fn play_target_cpu(source: Vec<f32>, hubert: softvc::Hubert, acoustic:
                             samples.resize(resampler_input_size, 0.0);
                         }
                         debug!("first 20 samples from inference: {:?}", samples[..20].to_vec()); 
-                        resampler_input_buffer[0].iter_mut().zip(
-                        samples.iter()
-                        .enumerate()
-                        .map(|(e, sample)| {
-                            let mut sa = 0.0;
-                            for i in 0..resampler_input_size/VAD_SIZE {
-                                if i == vad_bools.len() { break; }
-                                if e < (i+1)*VAD_SIZE && e > i*VAD_SIZE && vad_bools[i] {
-                                    sa = *sample;
-                                    break;
-                                }
-                            }
-                            sa
-                        }))
-                        .for_each(|(i, o)| *i = o) ;
+
+                        replace_inactivity_with_silence(&vad_bools, &mut samples);
+                        resampler_input_buffer[0].copy_from_slice(&samples);
+                        
                         let resampler_res = resampler.process_into_buffer(&resampler_input_buffer, &mut resampler_output_buffer, None);
                         if let Err(e) = resampler_res {
                             error!("{}", t!("log.error.out_resampler", error = e.to_string().as_str()));
                         }
-                        resampler_output_buffer[0].iter().for_each(|&sample| {
-                            // mono to stereo etc.
-                            for _ in 0..n_channels {
-                                producer.push_back(sample)
-                            }
-                        });
+                        dupe_n_channels_vecdeque(n_channels, &resampler_output_buffer[0], &mut producer)
                     }
                 }
                 if cancel_token3.load(std::sync::atomic::Ordering::Relaxed) {

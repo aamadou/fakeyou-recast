@@ -10,7 +10,8 @@ use cpal::{BufferSize, SampleFormat};
 use log::{info, debug, error};
 use rust_i18n::t;
 
-use crate::{softvc, handle_errors, AppError, audio::{self, DeviceType}, consts::{MODEL_SAMPLE_RATE, VAD_SIZE}};
+use crate::audio_pipelines::common::{compute_vad, replace_inactivity_with_silence, mix_n_channels, dupe_n_channels};
+use crate::{softvc, handle_errors, AppError, audio::{self, DeviceType}, consts::MODEL_SAMPLE_RATE};
 
 use crate::{INPUT_VOLUME, OUTPUT_VOLUME};// FIXME (refactor this better)
 
@@ -131,19 +132,15 @@ pub async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, 
 
 
     std::thread::spawn(move || {
-        let mut vad = Vad::new_with_rate_and_mode(SampleRate::Rate16kHz, VadMode::Aggressive);
+        let mut vad = Vad::new_with_rate_and_mode(SampleRate::Rate16kHz, VadMode::Aggressive); 
         loop {
             if consumer1.len() >= resampler1_input_size {
                 let processing_start_time = std::time::Instant::now();
-                // mix stereo (or more channels) to mono
                 resampler1_input_buffer[0].clear();
-                for _ in 0..(in_chunk_size / in_n_channels) {
-                    let mut mixed: f32 = 0.0;
-                    for _ in 0..in_n_channels {
-                        mixed += consumer1.pop().unwrap_or(0.0); 
-                    }
-                    resampler1_input_buffer[0].push(mixed);
-                }
+
+                // mix stereo (or more channels) to mono
+                mix_n_channels(in_n_channels, &mut consumer1, &mut resampler1_input_buffer[0], in_chunk_size);
+
                 // downsample to 16k
                 let res = resampler1.process_into_buffer(&resampler1_input_buffer, &mut resampler1_output_buffer, None);
                 match res {
@@ -161,14 +158,9 @@ pub async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, 
                         softvc_input.extend_from_within(0..softvc_input.len());
                     }
                 }
-                //softvc_input.resize(TENSOR_SIZE, 0.0);
 
                 // Find active 10ms chunks with WebRTC VAD
-                let mut vad_bools: Vec<bool> = Vec::new();
-                softvc_input[..resampler1_output_size].chunks(VAD_SIZE).for_each(|vad_chunk| {
-                    let vad_chunk_s16: Vec<i16> = vad_chunk.iter().map(|a: &f32| audio::float_to_pcm_s16(*a)).collect();
-                    vad_bools.push(vad.is_voice_segment(&vad_chunk_s16).unwrap_or(false));
-                });
+                let vad_bools = compute_vad(&mut vad, &softvc_input);
                 
                 let res = softvc::inference(&softvc_input, hubert.clone(), acoustic.clone(), hifigan.clone());
                 match res {
@@ -179,34 +171,17 @@ pub async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, 
                         }
                         cancel_token1.store(true, Ordering::Relaxed);
                     },
-                    Ok(samples) => {
-                        resampler2_input_buffer[0].iter_mut().zip(
-                        samples.iter()
-                            .enumerate()
-                            .map(|(e, sample)| {
-                                let mut sa = 0.0;
-                                for i in 0..(samples.len() / VAD_SIZE)  {
-                                    if i == vad_bools.len() { break; }
-                                    if e < (i+1)*VAD_SIZE && e > i*VAD_SIZE &&  vad_bools[i] {
-                                        sa = *sample;
-                                        break;
-                                    }
-                                }
-                                sa
-                            })
-                        ).for_each(|(i2, o1)| *i2 = o1);
+                    Ok(mut samples) => {
+                        replace_inactivity_with_silence(&vad_bools, &mut samples[..original_len]);
+                        resampler2_input_buffer[0].copy_from_slice(&samples[..original_len]);
                         let res = resampler2.process_into_buffer(&resampler2_input_buffer, &mut resampler2_output_buffer, None);
                         match res {
                             Ok(_) => {}
                             Err(e) => { error!("{}", t!("log.error.out_resampler", error = e.to_string().as_str())) }
                         };
 
-                        resampler2_output_buffer[0]/*[..original_len]*/.iter().for_each(|&sample| {
-                            // mono to stereo etc.
-                            for _ in 0..out_n_channels {
-                                producer2.push(sample).unwrap_or(()); 
-                            }
-                        });
+                        // mono to stereo etc.
+                        dupe_n_channels(out_n_channels, &resampler2_output_buffer[0], &mut producer2)
                     }
                 }
                 let processing_end_time = std::time::Instant::now();
