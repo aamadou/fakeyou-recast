@@ -8,8 +8,8 @@ pub enum AppState {
     ReadingFile,
     WritingFile,
     Realtime,
-    LoadingModel,
-    ModelWarmup,
+    //LoadingModel, TODO
+    //ModelWarmup,
     Idle,
 }
 
@@ -22,8 +22,8 @@ impl core::fmt::Display for AppState {
             Self::ReadingFile    => { f.write_str(&t!("app_state.reading_file")) },
             Self::WritingFile    => { f.write_str(&t!("app_state.writing_file")) },
             Self::Realtime       => { f.write_str(&t!("app_state.realtime")) },
-            Self::LoadingModel   => { f.write_str(&t!("app_state.loading_model")) },
-            Self::ModelWarmup    => { f.write_str(&t!("app_state.model_warmup")) },
+            //Self::LoadingModel   => { f.write_str(&t!("app_state.loading_model")) },
+            //Self::ModelWarmup    => { f.write_str(&t!("app_state.model_warmup")) },
             Self::Idle           => { f.write_str("") },
         }
     }

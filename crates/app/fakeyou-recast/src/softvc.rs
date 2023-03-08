@@ -2,7 +2,7 @@ use std::io::BufReader;
 use std::sync::{Arc, Mutex};
 use std::path::PathBuf;
 use tch::{CModule, Tensor};
-use crate::AppError;
+use crate::error::AppError;
 
 pub type ModelArc = Arc<Mutex<Option<CModule>>>;
 

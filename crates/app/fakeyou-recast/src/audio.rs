@@ -1,6 +1,6 @@
 use std::{fs::File, path::PathBuf, sync::mpsc::TryRecvError};
 use cpal::{self, SampleFormat, traits::{DeviceTrait, HostTrait, StreamTrait}};
-use crate::AppError;
+use crate::error::AppError;
 use log::{info, error};
 use rubato::{FftFixedInOut, Resampler};
 use crate::consts::*;
@@ -102,13 +102,13 @@ pub fn play_audio_vec(output_device: DeviceType, buf: Vec<f32>, receiver: std::s
         DeviceType::File((f, _)) => {
             let spec = hound::WavSpec {
                 channels: 1,
-                sample_rate: 16000,
-                bits_per_sample: 32,
-                sample_format: hound::SampleFormat::Float,
+                sample_rate: MODEL_SAMPLE_RATE as u32,
+                bits_per_sample: 16,
+                sample_format: hound::SampleFormat::Int,
             };
             let mut writer = hound::WavWriter::new(f, spec).map_err(|e| AppError::HoundError(e))?;
             for sample in buf.iter() {
-                writer.write_sample(apply_volume(*sample, unsafe { crate::OUTPUT_VOLUME })).map_err(|e| AppError::HoundError(e))?;
+                writer.write_sample(float_to_pcm_s16(apply_volume(*sample,  unsafe { crate::OUTPUT_VOLUME }))).map_err(|e| AppError::HoundError(e))?;
             }
             writer.finalize().map_err(|e| AppError::HoundError(e))?;
         },
@@ -121,7 +121,7 @@ pub fn play_audio_vec(output_device: DeviceType, buf: Vec<f32>, receiver: std::s
 
             info!("Output configured as: {} channels at {} Hz with format {:?}", out_n_channels, out_rate, sample_format);
 
-            let playback_secs = buf.len() as f32 / 16000.0;
+            let playback_secs = buf.len() as f32 / MODEL_SAMPLE_RATE as f32;
 
             // Resample
             let chunk_size = (out_rate as f32 * 0.4 * output_config.channels() as f32) as usize; // 400ms
@@ -170,6 +170,7 @@ pub fn play_audio_vec(output_device: DeviceType, buf: Vec<f32>, receiver: std::s
                         for (j, sample) in data_slice.iter_mut().enumerate() {
                             let s = output_vec[i];
                             *sample = float_to_pcm_s16(apply_volume(s, unsafe { crate::OUTPUT_VOLUME }));
+
                             // Expand one sample to n_channels samples
                             // ie mono to stereo
                             if j%(out_n_channels as usize) == 0 && i < output_vec.len() - 1
@@ -304,7 +305,7 @@ pub fn record_audio_vec(input_device: DeviceType, receiver: std::sync::mpsc::Rec
             let arc1 = arc_vec.clone();
             let arc2 = arc_vec.clone();
 
-            let input_vol = receiver.recv().map_err(|e| AppError::ChannelRecvError)?.1;
+            let input_vol = receiver.recv().map_err(|_e| AppError::ChannelRecvError)?.1;
             let atomic_vol = AtomicU32::new(input_vol.to_bits());
             let arc_atomic_vol = Arc::new(atomic_vol);
 
