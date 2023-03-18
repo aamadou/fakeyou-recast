@@ -7,4 +7,5 @@ samples/
 *.pt
 *.jit
 *.fakeyou
+*.onnx
 .sessiontoken

@@ -11,7 +11,7 @@ use log::{info, debug, error};
 use rust_i18n::t;
 
 use crate::audio_pipelines::common::{compute_vad, replace_inactivity_with_silence, mix_n_channels, dupe_n_channels};
-use crate::{softvc, handle_errors, AppError, audio::{self, DeviceType}, consts::MODEL_SAMPLE_RATE};
+use crate::{ml::softvc, handle_errors, AppError, audio::{self, DeviceType}, consts::MODEL_SAMPLE_RATE};
 
 use crate::{INPUT_VOLUME, OUTPUT_VOLUME};// FIXME (refactor this better)
 

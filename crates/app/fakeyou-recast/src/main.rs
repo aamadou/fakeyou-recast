@@ -16,7 +16,7 @@ mod api;
 mod audio;
 mod consts;
 mod discord;
-mod softvc;
+mod ml;
 mod view;
 mod spinner;
 mod error;
@@ -24,8 +24,9 @@ mod app_state;
 mod audio_pipelines;
 
 use consts::*;
+use tract_onnx::prelude::TValue;
 use crate::discord::spawn_discord_thread;
-use softvc::Model;
+use ml::softvc::{self, Model};
 use api::ApiError; // should this be in the error module?
 use app_state::AppState;
 use error::AppError;
@@ -198,7 +199,7 @@ impl Application for App {
         let hubert = softvc::Hubert::new();
         let acoustic = softvc::Acoustic::new();
         let hifigan = softvc::Hifigan::new();
-        let view_state = view::ViewState::new();
+        let mut view_state = view::ViewState::new();
         let record_sender = None;
         let realtime_record_sender = None;
         let play_target_sender = None;
@@ -272,6 +273,24 @@ impl Application for App {
         let launch_location = env::current_dir()
             .map_err(|err| error!("{}", t!("log.error.startup_dir", error = err.to_string().as_str())))
             .unwrap_or(PathBuf::from(""));
+
+        // TODO: remove this test code;
+        let mut so_vits_svc_model_path = launch_location.clone();
+        so_vits_svc_model_path.push("models");
+        so_vits_svc_model_path.push("hanashi-so-vits-svc-4.onnx");
+
+        let default_input = TValue::Const(std::sync::Arc::new(tract_onnx::prelude::Tensor::default()));
+
+        ml::so_vits_svc::SoVitsSvcModel::try_new(so_vits_svc_model_path)
+            .unwrap()
+            .inference(
+                default_input.clone(),
+                default_input.clone(),
+                default_input.clone(),
+                default_input.clone(),
+                default_input.clone(),
+                default_input.clone(),
+            ).unwrap();
 
         (
             App {

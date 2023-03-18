@@ -7,7 +7,7 @@ use cpal::{traits::{DeviceTrait, StreamTrait}, SampleFormat};
 use log::{info, debug, error};
 use rust_i18n::t;
 
-use crate::{softvc, handle_errors, AppError, audio::{self, DeviceType}, consts::{MODEL_SAMPLE_RATE, OFFLINE_CHUNK_SIZE}, 
+use crate::{ml::softvc, handle_errors, AppError, audio::{self, DeviceType}, consts::{MODEL_SAMPLE_RATE, OFFLINE_CHUNK_SIZE}, 
     audio_pipelines::common::{compute_vad, replace_inactivity_with_silence, dupe_n_channels, dupe_n_channels_vecdeque}
 }; 
 
