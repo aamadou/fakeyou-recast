@@ -7,6 +7,9 @@ use iced::{executor, Application, Element, Command, Settings, window::{self, Ico
 use log::{info, error};
 use model_serde::serde::deserializer::ModelDeserializer;
 use native_dialog::{FileDialog, MessageDialog};
+use ndarray::{Dim, IxDynImpl};
+use onnxruntime::{tensor::OrtOwnedTensor, environment::Environment, LoggingLevel, GraphOptimizationLevel, TypedArray};
+use rand::Rng;
 use rust_i18n::t;
 use rust_i18n::i18n;
 
@@ -15,7 +18,7 @@ i18n!("../../../assets/locales");
 mod api;
 mod audio;
 mod consts;
-mod discord;
+//mod discord;
 mod ml;
 mod view;
 mod spinner;
@@ -24,8 +27,7 @@ mod app_state;
 mod audio_pipelines;
 
 use consts::*;
-use tract_onnx::prelude::TValue;
-use crate::discord::spawn_discord_thread;
+//use crate::discord::spawn_discord_thread;
 use ml::softvc::{self, Model};
 use api::ApiError; // should this be in the error module?
 use app_state::AppState;
@@ -38,7 +40,7 @@ const ICON: &[u8; 262144] = include_bytes!("../../../../assets/icon.data");
 pub fn main() -> iced::Result {
     let _ = init_logging(); //nowhere to log an error if one happens here
 
-    spawn_discord_thread();
+    //spawn_discord_thread();
 
     let settings = Settings {
         window: window::Settings {
@@ -73,6 +75,7 @@ fn init_logging() -> Result<(), fern::InitError> {
         .level_for("fakeyou_recast::audio_pipelines", log::LevelFilter::Info) // NB do we need to do this?
                                                                               
         .level_for("fakeyou_recast::audio", log::LevelFilter::Info)
+        .level_for("onnxruntime", log::LevelFilter::Debug)
         //.level_for("fakeyou_recast::softvc", log::LevelFilter::Info)
         //.level_for("fakeyou_recast::vad", log::LevelFilter::Info)   // commented out because I realized this leaks our
                                                                       //model architecture (as a string), hopefully we don't need
@@ -269,28 +272,15 @@ impl Application for App {
         else {
             command = Command::none();
         }
+        
+        
 
         let launch_location = env::current_dir()
             .map_err(|err| error!("{}", t!("log.error.startup_dir", error = err.to_string().as_str())))
             .unwrap_or(PathBuf::from(""));
 
-        // TODO: remove this test code;
-        let mut so_vits_svc_model_path = launch_location.clone();
-        so_vits_svc_model_path.push("models");
-        so_vits_svc_model_path.push("hanashi-so-vits-svc-4.onnx");
 
-        let default_input = TValue::Const(std::sync::Arc::new(tract_onnx::prelude::Tensor::default()));
-
-        ml::so_vits_svc::SoVitsSvcModel::try_new(so_vits_svc_model_path)
-            .unwrap()
-            .inference(
-                default_input.clone(),
-                default_input.clone(),
-                default_input.clone(),
-                default_input.clone(),
-                default_input.clone(),
-                default_input.clone(),
-            ).unwrap();
+        so_vits_svc_test(launch_location.clone()).unwrap();
 
         (
             App {
@@ -798,3 +788,92 @@ impl App {
     }
 }
 
+fn so_vits_svc_test<'a, 'b>(launch_location: std::path::PathBuf) -> Result</*Vec<OrtOwnedTensor<'a, 'b, f32, Dim<IxDynImpl>>>,*/(), onnxruntime::error::OrtError> {
+    let mut environment = Environment::builder()
+    .with_name("test")
+    .with_log_level(LoggingLevel::Verbose)
+    .build()?;
+
+    // TODO: remove this test code;
+    let mut so_vits_svc_path = launch_location.clone();
+    so_vits_svc_path.push("models");
+    so_vits_svc_path.push("hanashi-so-vits-svc-4.onnx");
+    let mut onnx_hubert_path = launch_location.clone();
+    onnx_hubert_path.push("models");
+    onnx_hubert_path.push("hubert4.0.onnx");
+    //let mut so_vits_svc = ml::so_vits_svc::SoVitsSvcModel::try_new(onnx_hubert_path, so_vits_svc_path, &environment).unwrap();
+
+    let mut hubert =  environment
+    .new_session_builder()?
+    .with_optimization_level(GraphOptimizationLevel::All)?
+    .with_model_from_file(onnx_hubert_path)?;
+
+     
+    let test_data_path = "/mnt/8terra/tts/voice-conversion-sources/brandon2.wav";
+    let f = std::fs::File::open(test_data_path).unwrap();
+    let mut wavreader  = hound::WavReader::new(f).unwrap();
+    let test_data = wavreader.samples().map(|s| s.unwrap()).collect::<Vec<f32>>();
+    let tensor = vec![ndarray::arr1(&test_data).into_shape([1, 1, 2679467]).unwrap()];
+    let hubert_run_start = std::time::Instant::now();
+    let hubert_output: Vec<OrtOwnedTensor<f32, Dim<IxDynImpl>>> = hubert.run(tensor)?;
+    let hubert_run_end = std::time::Instant::now();
+    println!("Hubert time: {:?}", hubert_run_end-hubert_run_start);
+    //println!("{:?}...", hubert_output.as_slice()[0].as_slice().unwrap()[0..20].to_vec());
+    println!("{:?}", hubert_output[0].shape());
+
+    let mut so_vits_svc = environment.new_session_builder()?
+        .with_optimization_level(GraphOptimizationLevel::All)?
+        .with_model_from_file(so_vits_svc_path)?;
+
+    //println!("{:?}", so_vits_svc.inputs[1].dimensions);
+
+    use rand::Fill;
+    //let pitch = ndarray::Array::from_shape_vec(Dim([1,8373]), vec![125.0f32; 8373]).unwrap().into_dyn();
+    
+    use rsworld::{dio, stonemask};
+    use rsworld_sys::DioOption;
+
+    let double: Vec<f64> = test_data.iter().map(|float| (*float).into()).collect();
+    let (t, f0) = dio(&double, 16000, &DioOption { f0_floor: 71.0, f0_ceil:800.0, channels_in_octave:2.0, frame_period: 1000.0*(2679467.0/8373.0)/16000.0, speed: 1, allowed_range: 0.1});
+    let f0_vec = stonemask(&double, 16000, &t, &f0);
+    let mut f0_vec: Vec<f32> = f0_vec.iter().map(|d| *d as f32 ).collect();
+    f0_vec.resize(8373, 0.0);
+
+    let pitch = ndarray::Array::from_shape_vec(Dim([1, 8373]), f0_vec).unwrap().into_dyn();
+
+    let mel2ph = (0..8373i64).into_iter().collect::<ndarray::Array1<i64>>().into_shape([1, 8373]).unwrap().into_dyn();
+    let uv = ndarray::Array::ones([1, 8373]).into_dyn();
+    let mut rng = rand::thread_rng();
+    let mut random = [0.0f32; 1607616];
+    random.try_fill(&mut rng).unwrap();
+    let noise = ndarray::Array::from_shape_vec([1, 192, 8373], random.to_vec()).unwrap().into_dyn();
+    //let noise = ndarray::Array::from_shape_vec([1, 192, 8373], vec![0.0; 85248]).unwrap().into_dyn();
+    let speaker = ndarray::arr1(&[0]).into_dyn();
+
+
+    let svc_inputs = vec![TypedArray::F32(hubert_output[0].to_owned()), TypedArray::F32(pitch), TypedArray::I64(mel2ph), TypedArray::F32(uv), TypedArray::F32(noise), TypedArray::I64(speaker)];
+
+    let outputs = so_vits_svc.run_mixed::<f32, Dim<IxDynImpl>>(svc_inputs).unwrap();
+
+    println!("{:?}", outputs[0].as_slice().unwrap()[0..20].to_vec());
+
+    outputs[0].as_slice().unwrap();
+
+
+     let f = std::fs::File::create("output.wav").unwrap();
+     let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 44100 as u32,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+
+    let mut writer = hound::WavWriter::new(f, spec).unwrap();
+    for sample in outputs[0].iter() {
+        writer.write_sample(*sample).unwrap();
+    }
+    writer.finalize().unwrap();
+
+
+    Ok(())
+}

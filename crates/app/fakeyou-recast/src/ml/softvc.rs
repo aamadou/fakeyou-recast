@@ -42,7 +42,11 @@ impl Hubert {
     pub fn forward(&self, samples: &[f32]) -> Result<tch::Tensor, AppError> {
         let tensor = Tensor::of_slice(&samples).unsqueeze(0).unsqueeze(0).to(tch::Device::cuda_if_available());
         let model = self.0.try_lock().map_err(|_e| AppError::LockError)?;
-        model.as_ref().ok_or(AppError::NoModel)?.method_ts("units", &[tensor]).map_err(|_e| AppError::ModelError(_e))
+        let hubert_start_time = std::time::Instant::now();
+        let result = model.as_ref().ok_or(AppError::NoModel)?.method_ts("units", &[tensor]).map_err(|_e| AppError::ModelError(_e));
+        let hubert_end_time = std::time::Instant::now();
+        println!("Hubert time: {:?}", hubert_end_time-hubert_start_time);
+        result
     }
     pub fn new() -> Self {
         Self(ModelArc::default())
