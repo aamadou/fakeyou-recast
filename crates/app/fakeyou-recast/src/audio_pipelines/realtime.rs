@@ -79,7 +79,7 @@ pub async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, 
     debug!("resampler1_output_size: {}", resampler1_output_size);
     resampler1_input_buffer[0].resize(resampler1_input_size, 0.0);
 
-    let mut resampler2 = FftFixedInOut::<f32>::new(MODEL_SAMPLE_RATE, out_rate, in_chunk_size / in_n_channels, 1).map_err(|e| AppError::ResamplerConstructionError(e))?;
+    let mut resampler2 = FftFixedInOut::<f32>::new(MODEL_SAMPLE_RATE, out_rate, out_chunk_size/out_n_channels, 1).map_err(|e| AppError::ResamplerConstructionError(e))?;
     let mut resampler2_input_buffer = resampler2.input_buffer_allocate();
     let mut resampler2_output_buffer = resampler2.output_buffer_allocate();
     let resampler2_input_size = resampler2.input_frames_next();
