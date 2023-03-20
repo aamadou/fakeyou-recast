@@ -1,7 +1,10 @@
+use std::sync::{Mutex, Arc};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::TryRecvError;
 
 use native_dialog::MessageDialog;
+use onnxruntime::{LoggingLevel, GraphOptimizationLevel};
+use onnxruntime::environment::Environment;
 use ringbuf::RingBuffer;
 use rubato::{FftFixedInOut, Resampler};
 use webrtc_vad::{SampleRate, Vad, VadMode};
@@ -17,7 +20,7 @@ use crate::{INPUT_VOLUME, OUTPUT_VOLUME};// FIXME (refactor this better)
 
 
 /// Realtime record => record and playback at the same time
-pub async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32, f32)>, input_device: audio::DeviceType, output_device: audio::DeviceType, hubert: softvc::Hubert, acoustic: softvc::Acoustic, hifigan: softvc::Hifigan, chunk_size_secs: f32, duplicate_5x: bool) -> Result<(), AppError>
+pub async fn start_realtime<'a>(realtime_receiver: std::sync::mpsc::Receiver<(bool, f32, f32)>, input_device: audio::DeviceType, output_device: audio::DeviceType, hubert: softvc::Hubert, acoustic: softvc::Acoustic, hifigan: softvc::Hifigan,  chunk_size_secs: f32, duplicate_5x: bool) -> Result<(), AppError>
 {
     info!("{}", t!("log.info.start_realtime", in = input_device.to_string().as_str(), out = output_device.to_string().as_str()));
     let arc_cancel_token = std::sync::Arc::new(AtomicBool::new(false));
@@ -79,7 +82,7 @@ pub async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, 
     debug!("resampler1_output_size: {}", resampler1_output_size);
     resampler1_input_buffer[0].resize(resampler1_input_size, 0.0);
 
-    let mut resampler2 = FftFixedInOut::<f32>::new(MODEL_SAMPLE_RATE, out_rate, in_chunk_size / in_n_channels, 1).map_err(|e| AppError::ResamplerConstructionError(e))?;
+    let mut resampler2 = FftFixedInOut::<f32>::new(44100, out_rate, in_chunk_size / in_n_channels, 1).map_err(|e| AppError::ResamplerConstructionError(e))?;
     let mut resampler2_input_buffer = resampler2.input_buffer_allocate();
     let mut resampler2_output_buffer = resampler2.output_buffer_allocate();
     let resampler2_input_size = resampler2.input_frames_next();
@@ -133,6 +136,35 @@ pub async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, 
 
     std::thread::spawn(move || {
         let mut vad = Vad::new_with_rate_and_mode(SampleRate::Rate16kHz, VadMode::Aggressive); 
+        
+        let mut environment = Environment::builder()
+        .with_name("test")
+        .with_log_level(LoggingLevel::Verbose)
+        .build().unwrap();
+
+        let mut launch_location = std::path::PathBuf::from(".");
+
+        // TODO: remove this test code;
+        let mut so_vits_svc_path = launch_location.clone();
+        so_vits_svc_path.push("models");
+        so_vits_svc_path.push("hanashi-so-vits-svc-4.onnx");
+        let mut onnx_hubert_path = launch_location.clone();
+        onnx_hubert_path.push("models");
+        onnx_hubert_path.push("hubert4.0.onnx");
+        //let mut so_vits_svc = ml::so_vits_svc::SoVitsSvcModel::try_new(onnx_hubert_path, so_vits_svc_path, &environment).unwrap();
+
+        let mut hubert_onnx =  Arc::new(Mutex::new(environment
+        .new_session_builder().unwrap()
+        .with_optimization_level(GraphOptimizationLevel::All).unwrap()
+        .with_model_from_file(onnx_hubert_path).unwrap()));
+
+
+
+        let mut so_vits_svc = Arc::new(Mutex::new(environment.new_session_builder().unwrap()
+        .with_optimization_level(GraphOptimizationLevel::All).unwrap()
+        .with_model_from_file(so_vits_svc_path).unwrap()));
+
+
         loop {
             if consumer1.len() >= resampler1_input_size {
                 let processing_start_time = std::time::Instant::now();
@@ -162,7 +194,16 @@ pub async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, 
                 // Find active 10ms chunks with WebRTC VAD
                 let vad_bools = compute_vad(&mut vad, &softvc_input);
                 
-                let res = softvc::inference(&softvc_input, hubert.clone(), acoustic.clone(), hifigan.clone());
+                //let res = softvc::inference(&softvc_input, hubert.clone(), acoustic.clone(), hifigan.clone());
+
+                let so_vits_svc_arc = so_vits_svc.clone();
+                let so_vits_svc = so_vits_svc_arc.try_lock().unwrap();
+                let hubert_onnx_arc  = hubert_onnx.clone();
+                let hubert_onnx = hubert_onnx_arc.try_lock().unwrap();
+
+
+                let res = crate::ml::so_vits_svc::inference(so_vits_svc, hubert_onnx, &softvc_input).map_err(|e| AppError::OrtError(e)); 
+
                 match res {
                     Err(e) => {
                         // don't spam errors if there's already one known
@@ -173,7 +214,7 @@ pub async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, 
                     },
                     Ok(mut samples) => {
                         replace_inactivity_with_silence(&vad_bools, &mut samples[..original_len]);
-                        resampler2_input_buffer[0].copy_from_slice(&samples[..original_len]);
+                        resampler2_input_buffer[0].copy_from_slice(&samples[..17640]);
                         let res = resampler2.process_into_buffer(&resampler2_input_buffer, &mut resampler2_output_buffer, None);
                         match res {
                             Ok(_) => {}
@@ -189,7 +230,7 @@ pub async fn start_realtime(realtime_receiver: std::sync::mpsc::Receiver<(bool, 
                     break;
                 }
                 let processing_time = processing_end_time - processing_start_time;
-                let sleep_time = resampler1_output_size as f32 / MODEL_SAMPLE_RATE as f32 - processing_time.as_secs_f32();
+                let sleep_time = resampler1_output_size as f32 / 44100 as f32 - processing_time.as_secs_f32();
                 if sleep_time > 0.0 {
                     std::thread::sleep(core::time::Duration::from_secs_f32(sleep_time));
                 }

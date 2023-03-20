@@ -280,7 +280,6 @@ impl Application for App {
             .unwrap_or(PathBuf::from(""));
 
 
-        so_vits_svc_test(launch_location.clone()).unwrap();
 
         (
             App {
@@ -313,9 +312,9 @@ impl Application for App {
         t!("app_name")
     }
 
-    fn background_color(&self) -> Color {
+    /*fn background_color(&self) -> Color {
         Color::new(26.0, 26.0, 39.0, 1.0)
-    }
+    }*/
 
     /// UI setup and state changes
     fn view(&mut self) -> Element<Message> { view::view(&mut self.view_state, &self.input_device_list_options, &self.output_device_list_options, self.state, self.cpu_mode.clone()) }
@@ -788,92 +787,3 @@ impl App {
     }
 }
 
-fn so_vits_svc_test<'a, 'b>(launch_location: std::path::PathBuf) -> Result</*Vec<OrtOwnedTensor<'a, 'b, f32, Dim<IxDynImpl>>>,*/(), onnxruntime::error::OrtError> {
-    let mut environment = Environment::builder()
-    .with_name("test")
-    .with_log_level(LoggingLevel::Verbose)
-    .build()?;
-
-    // TODO: remove this test code;
-    let mut so_vits_svc_path = launch_location.clone();
-    so_vits_svc_path.push("models");
-    so_vits_svc_path.push("hanashi-so-vits-svc-4.onnx");
-    let mut onnx_hubert_path = launch_location.clone();
-    onnx_hubert_path.push("models");
-    onnx_hubert_path.push("hubert4.0.onnx");
-    //let mut so_vits_svc = ml::so_vits_svc::SoVitsSvcModel::try_new(onnx_hubert_path, so_vits_svc_path, &environment).unwrap();
-
-    let mut hubert =  environment
-    .new_session_builder()?
-    .with_optimization_level(GraphOptimizationLevel::All)?
-    .with_model_from_file(onnx_hubert_path)?;
-
-     
-    let test_data_path = "/mnt/8terra/tts/voice-conversion-sources/brandon2.wav";
-    let f = std::fs::File::open(test_data_path).unwrap();
-    let mut wavreader  = hound::WavReader::new(f).unwrap();
-    let test_data = wavreader.samples().map(|s| s.unwrap()).collect::<Vec<f32>>();
-    let tensor = vec![ndarray::arr1(&test_data).into_shape([1, 1, 2679467]).unwrap()];
-    let hubert_run_start = std::time::Instant::now();
-    let hubert_output: Vec<OrtOwnedTensor<f32, Dim<IxDynImpl>>> = hubert.run(tensor)?;
-    let hubert_run_end = std::time::Instant::now();
-    println!("Hubert time: {:?}", hubert_run_end-hubert_run_start);
-    //println!("{:?}...", hubert_output.as_slice()[0].as_slice().unwrap()[0..20].to_vec());
-    println!("{:?}", hubert_output[0].shape());
-
-    let mut so_vits_svc = environment.new_session_builder()?
-        .with_optimization_level(GraphOptimizationLevel::All)?
-        .with_model_from_file(so_vits_svc_path)?;
-
-    //println!("{:?}", so_vits_svc.inputs[1].dimensions);
-
-    use rand::Fill;
-    //let pitch = ndarray::Array::from_shape_vec(Dim([1,8373]), vec![125.0f32; 8373]).unwrap().into_dyn();
-    
-    use rsworld::{dio, stonemask};
-    use rsworld_sys::DioOption;
-
-    let double: Vec<f64> = test_data.iter().map(|float| (*float).into()).collect();
-    let (t, f0) = dio(&double, 16000, &DioOption { f0_floor: 71.0, f0_ceil:800.0, channels_in_octave:2.0, frame_period: 1000.0*(2679467.0/8373.0)/16000.0, speed: 1, allowed_range: 0.1});
-    let f0_vec = stonemask(&double, 16000, &t, &f0);
-    let mut f0_vec: Vec<f32> = f0_vec.iter().map(|d| *d as f32 ).collect();
-    f0_vec.resize(8373, 0.0);
-
-    let pitch = ndarray::Array::from_shape_vec(Dim([1, 8373]), f0_vec).unwrap().into_dyn();
-
-    let mel2ph = (0..8373i64).into_iter().collect::<ndarray::Array1<i64>>().into_shape([1, 8373]).unwrap().into_dyn();
-    let uv = ndarray::Array::ones([1, 8373]).into_dyn();
-    let mut rng = rand::thread_rng();
-    let mut random = [0.0f32; 1607616];
-    random.try_fill(&mut rng).unwrap();
-    let noise = ndarray::Array::from_shape_vec([1, 192, 8373], random.to_vec()).unwrap().into_dyn();
-    //let noise = ndarray::Array::from_shape_vec([1, 192, 8373], vec![0.0; 85248]).unwrap().into_dyn();
-    let speaker = ndarray::arr1(&[0]).into_dyn();
-
-
-    let svc_inputs = vec![TypedArray::F32(hubert_output[0].to_owned()), TypedArray::F32(pitch), TypedArray::I64(mel2ph), TypedArray::F32(uv), TypedArray::F32(noise), TypedArray::I64(speaker)];
-
-    let outputs = so_vits_svc.run_mixed::<f32, Dim<IxDynImpl>>(svc_inputs).unwrap();
-
-    println!("{:?}", outputs[0].as_slice().unwrap()[0..20].to_vec());
-
-    outputs[0].as_slice().unwrap();
-
-
-     let f = std::fs::File::create("output.wav").unwrap();
-     let spec = hound::WavSpec {
-        channels: 1,
-        sample_rate: 44100 as u32,
-        bits_per_sample: 32,
-        sample_format: hound::SampleFormat::Float,
-    };
-
-    let mut writer = hound::WavWriter::new(f, spec).unwrap();
-    for sample in outputs[0].iter() {
-        writer.write_sample(*sample).unwrap();
-    }
-    writer.finalize().unwrap();
-
-
-    Ok(())
-}

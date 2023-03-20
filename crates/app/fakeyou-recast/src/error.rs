@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use rust_i18n::t;
+use onnxruntime::error::OrtError;
 
 #[derive(Debug)]
 pub enum AppError {
@@ -20,7 +21,8 @@ pub enum AppError {
     ModelError(tch::TchError),
     FileDialogError(PathBuf),
     ResamplerConstructionError(rubato::ResamplerConstructionError),
-    ResampleError(rubato::ResampleError)
+    ResampleError(rubato::ResampleError),
+    OrtError(OrtError)
 }
 
 impl core::fmt::Display for AppError {
@@ -46,6 +48,7 @@ impl core::fmt::Display for AppError {
             AppError::IoError(e) => f.write_str(t!("log.error.io", error = e.to_string().as_str()).as_str()),
             AppError::ResamplerConstructionError(e) => f.write_str(t!("log.error.resampler_construction", error = e.to_string().as_str()).as_str()),
             AppError::ResampleError(e) => f.write_str(t!("log.error.resample", error = e.to_string().as_str()).as_str()),
+            AppError::OrtError(e) => f.write_str(e.to_string().as_str()),
 
         }
     }
