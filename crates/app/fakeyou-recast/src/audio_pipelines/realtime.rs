@@ -82,7 +82,7 @@ pub async fn start_realtime<'a>(realtime_receiver: std::sync::mpsc::Receiver<(bo
     debug!("resampler1_output_size: {}", resampler1_output_size);
     resampler1_input_buffer[0].resize(resampler1_input_size, 0.0);
 
-    let mut resampler2 = FftFixedInOut::<f32>::new(44100, out_rate, in_chunk_size / in_n_channels, 1).map_err(|e| AppError::ResamplerConstructionError(e))?;
+    let mut resampler2 = FftFixedInOut::<f32>::new(44100, out_rate, (in_chunk_size as f32 / in_n_channels as f32 * out_rate as f32 / 44100 as f32) as usize, 1).map_err(|e| AppError::ResamplerConstructionError(e))?;
     let mut resampler2_input_buffer = resampler2.input_buffer_allocate();
     let mut resampler2_output_buffer = resampler2.output_buffer_allocate();
     let resampler2_input_size = resampler2.input_frames_next();
@@ -213,8 +213,10 @@ pub async fn start_realtime<'a>(realtime_receiver: std::sync::mpsc::Receiver<(bo
                         cancel_token1.store(true, Ordering::Relaxed);
                     },
                     Ok(mut samples) => {
-                        replace_inactivity_with_silence(&vad_bools, &mut samples[..original_len]);
-                        resampler2_input_buffer[0].copy_from_slice(&samples[..17640]);
+                        replace_inactivity_with_silence(&vad_bools, &mut samples);
+                        let original_len2 = samples.len();
+                        samples.resize(resampler2_input_size, 0.0);
+                        resampler2_input_buffer[0].copy_from_slice(&samples);
                         let res = resampler2.process_into_buffer(&resampler2_input_buffer, &mut resampler2_output_buffer, None);
                         match res {
                             Ok(_) => {}
@@ -230,7 +232,7 @@ pub async fn start_realtime<'a>(realtime_receiver: std::sync::mpsc::Receiver<(bo
                     break;
                 }
                 let processing_time = processing_end_time - processing_start_time;
-                let sleep_time = resampler1_output_size as f32 / 44100 as f32 - processing_time.as_secs_f32();
+                let sleep_time = resampler1_output_size as f32 / 16000 as f32 - processing_time.as_secs_f32();
                 if sleep_time > 0.0 {
                     std::thread::sleep(core::time::Duration::from_secs_f32(sleep_time));
                 }
