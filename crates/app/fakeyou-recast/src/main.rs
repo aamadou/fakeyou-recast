@@ -7,11 +7,15 @@ use iced::{executor, Application, Element, Command, Settings, window::{self, Ico
 use log::{info, error};
 use model_serde::serde::deserializer::ModelDeserializer;
 use native_dialog::{FileDialog, MessageDialog};
-use ndarray::{Dim, IxDynImpl};
+use ndarray::{Dim, IxDynImpl, Ix3, Ix2};
 use onnxruntime::{tensor::OrtOwnedTensor, environment::Environment, LoggingLevel, GraphOptimizationLevel, TypedArray};
 use rand::Rng;
 use rust_i18n::t;
 use rust_i18n::i18n;
+use rand::Fill;
+use rsworld::{dio, stonemask};
+use rsworld_sys::DioOption;
+
 
 i18n!("../../../assets/locales");
 
@@ -311,10 +315,6 @@ impl Application for App {
     /// Controls the title bar of the application window
     fn title(&self) -> String {
         t!("app_name")
-    }
-
-    fn background_color(&self) -> Color {
-        Color::new(26.0, 26.0, 39.0, 1.0)
     }
 
     /// UI setup and state changes
@@ -788,77 +788,71 @@ impl App {
     }
 }
 
-fn so_vits_svc_test<'a, 'b>(launch_location: std::path::PathBuf) -> Result</*Vec<OrtOwnedTensor<'a, 'b, f32, Dim<IxDynImpl>>>,*/(), onnxruntime::error::OrtError> {
-    let mut environment = Environment::builder()
+fn so_vits_svc_test<'a, 'b>(launch_location: std::path::PathBuf) -> Result<(), onnxruntime::error::OrtError> {
+    let environment = Environment::builder()
     .with_name("test")
     .with_log_level(LoggingLevel::Verbose)
     .build()?;
 
-    // TODO: remove this test code;
     let mut so_vits_svc_path = launch_location.clone();
     so_vits_svc_path.push("models");
     so_vits_svc_path.push("hanashi-so-vits-svc-4.onnx");
     let mut onnx_hubert_path = launch_location.clone();
     onnx_hubert_path.push("models");
     onnx_hubert_path.push("hubert4.0.onnx");
-    //let mut so_vits_svc = ml::so_vits_svc::SoVitsSvcModel::try_new(onnx_hubert_path, so_vits_svc_path, &environment).unwrap();
 
     let mut hubert =  environment
-    .new_session_builder()?
-    .with_optimization_level(GraphOptimizationLevel::All)?
-    .with_model_from_file(onnx_hubert_path)?;
+        .new_session_builder()?
+        .with_optimization_level(GraphOptimizationLevel::All)?
+        .with_model_from_file(onnx_hubert_path)?;
 
-     
-    let test_data_path = "/mnt/8terra/tts/voice-conversion-sources/brandon2.wav";
-    let f = std::fs::File::open(test_data_path).unwrap();
-    let mut wavreader  = hound::WavReader::new(f).unwrap();
-    let test_data = wavreader.samples().map(|s| s.unwrap()).collect::<Vec<f32>>();
-    let tensor = vec![ndarray::arr1(&test_data).into_shape([1, 1, 2679467]).unwrap()];
-    let hubert_run_start = std::time::Instant::now();
-    let hubert_output: Vec<OrtOwnedTensor<f32, Dim<IxDynImpl>>> = hubert.run(tensor)?;
-    let hubert_run_end = std::time::Instant::now();
-    println!("Hubert time: {:?}", hubert_run_end-hubert_run_start);
-    //println!("{:?}...", hubert_output.as_slice()[0].as_slice().unwrap()[0..20].to_vec());
-    println!("{:?}", hubert_output[0].shape());
 
     let mut so_vits_svc = environment.new_session_builder()?
         .with_optimization_level(GraphOptimizationLevel::All)?
         .with_model_from_file(so_vits_svc_path)?;
 
-    //println!("{:?}", so_vits_svc.inputs[1].dimensions);
+     
+    let path16k = "/mnt/8terra/tts/voice-conversion-sources/brandon2.wav";
+    let f16k = std::fs::File::open(path16k).unwrap();
+    let mut wavreader16k  = hound::WavReader::new(f16k).unwrap();
+    let data16k = wavreader16k.samples().map(|s| s.unwrap()).collect::<Vec<f32>>();
+    let data16k_len = data16k.len();
+    let tensor16k = vec![ndarray::arr1(&data16k).into_shape([1, 1, data16k_len]).unwrap()];
 
-    use rand::Fill;
-    //let pitch = ndarray::Array::from_shape_vec(Dim([1,8373]), vec![125.0f32; 8373]).unwrap().into_dyn();
-    
-    use rsworld::{dio, stonemask};
-    use rsworld_sys::DioOption;
+    let hubert_output: Vec<OrtOwnedTensor<f32, Dim<IxDynImpl>>> = hubert.run(tensor16k)?;
+    let hubert_shape = hubert_output[0].shape();
+    let hubert_output = hubert_output[0].clone().into_owned().into_dimensionality::<Ix3>().unwrap();
 
-    let double: Vec<f64> = test_data.iter().map(|float| (*float).into()).collect();
-    let (t, f0) = dio(&double, 16000, &DioOption { f0_floor: 71.0, f0_ceil:800.0, channels_in_octave:2.0, frame_period: 1000.0*(2679467.0/8373.0)/16000.0, speed: 1, allowed_range: 0.1});
-    let f0_vec = stonemask(&double, 16000, &t, &f0);
-    let mut f0_vec: Vec<f32> = f0_vec.iter().map(|d| *d as f32 ).collect();
-    f0_vec.resize(8373, 0.0);
+    let path441 = "/mnt/8terra/tts/voice-conversion-sources/brandon2_441.wav";
+    let f441 = std::fs::File::open(path441).unwrap();
+    let mut wavreader441  = hound::WavReader::new(f441).unwrap();
+    let wav441 = wavreader441.samples().map(|s| s.unwrap()).collect::<Vec<f32>>();
+    let double_wav441: Vec<f64> = wav441.iter().map(|float| (*float).into()).collect();
 
-    let pitch = ndarray::Array::from_shape_vec(Dim([1, 8373]), f0_vec).unwrap().into_dyn();
 
-    let mel2ph = (0..8373i64).into_iter().collect::<ndarray::Array1<i64>>().into_shape([1, 8373]).unwrap().into_dyn();
-    let uv = ndarray::Array::ones([1, 8373]).into_dyn();
+    let (t, f0) = dio(&double_wav441, 44100, &DioOption { f0_floor: 50.0, f0_ceil:1100.0, channels_in_octave:2.0, frame_period: 1000.0*512.0/44100.0, speed: 1, allowed_range: 0.1});
+    let f0_vec = stonemask(&double_wav441, 44100, &t, &f0);
+    let f0_vec: Vec<f32> = f0_vec.iter().map(|d| *d as f32 ).collect();
+    let f0_len = f0_vec.len();
+    let pitch = ndarray::Array::from_shape_vec(Dim([1, f0_len]), f0_vec).unwrap().into_dyn();
+
+
+    let hubert12 = hubert_output.into_shape([hubert_shape[1], hubert_shape[2]]).unwrap();
+    let hubert_expanded = repeat_expand_2d(hubert12, f0_len);
+    let hubert012 = hubert_expanded.into_shape([1, f0_len, hubert_shape[2]]).unwrap().into_dyn();
+
+    let mel2ph = (0..f0_len as i64).into_iter().collect::<ndarray::Array1<i64>>().into_shape([1, f0_len]).unwrap().into_dyn();
+    let uv = ndarray::Array::ones([1, f0_len]).into_dyn();
     let mut rng = rand::thread_rng();
-    let mut random = [0.0f32; 1607616];
+    let mut random = vec![0.0f32; f0_len*192];
     random.try_fill(&mut rng).unwrap();
-    let noise = ndarray::Array::from_shape_vec([1, 192, 8373], random.to_vec()).unwrap().into_dyn();
-    //let noise = ndarray::Array::from_shape_vec([1, 192, 8373], vec![0.0; 85248]).unwrap().into_dyn();
+    let noise = ndarray::Array::from_shape_vec([1, 192, f0_len], random).unwrap().into_dyn();
     let speaker = ndarray::arr1(&[0]).into_dyn();
 
 
-    let svc_inputs = vec![TypedArray::F32(hubert_output[0].to_owned()), TypedArray::F32(pitch), TypedArray::I64(mel2ph), TypedArray::F32(uv), TypedArray::F32(noise), TypedArray::I64(speaker)];
+    let svc_inputs = vec![TypedArray::F32(hubert012), TypedArray::F32(pitch), TypedArray::I64(mel2ph), TypedArray::F32(uv), TypedArray::F32(noise), TypedArray::I64(speaker)];
 
     let outputs = so_vits_svc.run_mixed::<f32, Dim<IxDynImpl>>(svc_inputs).unwrap();
-
-    println!("{:?}", outputs[0].as_slice().unwrap()[0..20].to_vec());
-
-    outputs[0].as_slice().unwrap();
-
 
      let f = std::fs::File::create("output.wav").unwrap();
      let spec = hound::WavSpec {
@@ -869,11 +863,31 @@ fn so_vits_svc_test<'a, 'b>(launch_location: std::path::PathBuf) -> Result</*Vec
     };
 
     let mut writer = hound::WavWriter::new(f, spec).unwrap();
-    for sample in outputs[0].iter() {
+    for sample in outputs[0].clone().into_iter() {
         writer.write_sample(*sample).unwrap();
     }
     writer.finalize().unwrap();
 
 
     Ok(())
+}
+
+// some kind of janky repeat/copy/interpolate function I stole from so_vits_svc_fork
+// could probably be implemented cleaner
+fn repeat_expand_2d(content: ndarray::Array2<f32>, target_len: usize) -> ndarray::Array2<f32> {
+    let src_len =  content.shape()[0];
+    let dim0 = content.shape()[1];
+    let mut target = ndarray::Array::zeros((target_len, dim0));
+    let temp = ndarray::Array1::linspace(0.0, (src_len+1) as f32, src_len+1);
+    let temp = temp * (target_len as f64 / src_len as f64) as f32;
+    let mut current_pos = 0;
+    for i in 0..target_len {
+        if (i as f32) < temp[current_pos + 1] {
+            target.slice_mut(ndarray::s!(i, ..)).assign(&content.slice(ndarray::s!(current_pos, ..)));
+        } else {
+            current_pos += 1;
+            target.slice_mut(ndarray::s!(i, ..)).assign(&content.slice(ndarray::s!(current_pos, ..)));
+        }
+    }
+    target
 }
