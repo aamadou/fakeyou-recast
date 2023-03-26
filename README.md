@@ -1,6 +1,6 @@
 # Dependencies
 - The Rust programming language https://rustup.rs/
-- libtorch 1.13.0 (cxx-abi? can't remember, try both options) https://pytorch.org/get-started/locally/
+- libtorch 1.13.0 cxx-abi https://pytorch.org/get-started/locally/
 - cuda-toolkit https://developer.nvidia.com/cuda-downloads
 - maybe cudnn too idk?
 - vulkan/directx/metal (should be provided by your graphics driver)
